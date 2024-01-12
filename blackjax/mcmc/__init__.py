@@ -6,6 +6,7 @@ from . import (
     mala,
     marginal_latent_gaussian,
     mclmc,
+    mclmc_gibbs,
     nuts,
     periodic_orbital,
     random_walk,
@@ -24,4 +25,5 @@ __all__ = [
     "marginal_latent_gaussian",
     "random_walk",
     "mclmc",
+    "mclmc_gibbs"
 ]

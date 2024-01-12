@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Public API for the MCLMC Kernel"""
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Any
 
 import jax
 import jax.numpy as jnp
@@ -77,10 +77,10 @@ def build_kernel(logdensity_fn, integrator):
     step = integrator(logdensity_fn)
 
     def kernel(
-        rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float
+        rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float, args: Any,
     ) -> tuple[IntegratorState, MCLMCInfo]:
         (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
-            state, step_size
+            state, step_size, args
         )
 
         # Langevin-like noise

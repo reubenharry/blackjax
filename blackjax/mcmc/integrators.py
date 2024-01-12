@@ -93,7 +93,7 @@ def generalized_two_stage_integrator(
         Integrator function.
     """
 
-    def one_step(state: IntegratorState, step_size: float):
+    def one_step(state: IntegratorState, step_size: float, args: Any):
         position, momentum, _, logdensity_grad = state
         # auxiliary infomation generated during integration for diagnostics. It is
         # updated by the operator1 and operator2 at each call.
@@ -120,6 +120,7 @@ def generalized_two_stage_integrator(
                     kinetic_grad,
                     step_size,
                     coef,
+                    args,
                     position_update_info,
                 )
         # Separate the last steps to short circuit the computation of the kinetic_grad.
@@ -157,6 +158,7 @@ def euclidean_position_update_fn(logdensity_fn: Callable):
         kinetic_grad: ArrayTree,
         step_size: float,
         coef: float,
+        args: Any,
         auxiliary_info=None,
     ):
         del auxiliary_info
@@ -165,7 +167,7 @@ def euclidean_position_update_fn(logdensity_fn: Callable):
             position,
             kinetic_grad,
         )
-        logdensity, logdensity_grad = logdensity_and_grad_fn(new_position)
+        logdensity, logdensity_grad = logdensity_and_grad_fn(new_position, args)
         return new_position, logdensity, logdensity_grad, None
 
     return update
