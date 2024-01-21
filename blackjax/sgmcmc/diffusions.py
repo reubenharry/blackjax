@@ -16,6 +16,7 @@ import operator
 
 import jax
 import jax.numpy as jnp
+from blackjax.mcmc.mclmc import partially_refresh_momentum
 
 from blackjax.types import ArrayLikeTree, ArrayTree, PRNGKey
 from blackjax.util import generate_gaussian_noise, pytree_size
@@ -48,6 +49,30 @@ def overdamped_langevin():
         )
 
         return position
+
+    return one_step
+
+def sgmclmc():
+    """Integrator for MCLMC
+
+
+    """
+
+    def one_step(
+        rng_key: PRNGKey,
+        state: ArrayLikeTree,
+        logdensity_grad: ArrayLikeTree,
+        L : float,
+        step_size: float,
+    ) -> ArrayTree:
+        
+        position, momentum = todo
+
+        momentum = partially_refresh_momentum(
+            momentum=momentum, rng_key=rng_key, L=L, step_size=step_size
+        )
+
+        return position, momentum
 
     return one_step
 

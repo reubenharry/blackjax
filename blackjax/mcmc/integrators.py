@@ -347,7 +347,6 @@ def format_isokinetic_state_output(
         momentum_update_info,
     )
 
-
 def generate_isokinetic_integrator(cofficients):
     def isokinetic_integrator(
         logdensity_fn: Callable, *args, **kwargs
