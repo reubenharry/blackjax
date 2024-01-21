@@ -61,7 +61,7 @@ def sgmclmc():
     def one_step(
         rng_key: PRNGKey,
         state: ArrayLikeTree,
-        logdensity_grad: ArrayLikeTree,
+        logdensity_grad_fn: ArrayLikeTree,
         L : float,
         step_size: float,
     ) -> ArrayTree:

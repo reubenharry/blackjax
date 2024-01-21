@@ -38,7 +38,7 @@ def build_kernel() -> Callable:
         step_size: float,
     ) -> ArrayTree:
         position, _ = state
-        logdensity_grad_fn = lambda pos : grad_estimator(minibatch)
+        logdensity_grad_fn = lambda pos : grad_estimator(pos, minibatch)
 
         return integrator(
             rng_key, state, logdensity_grad_fn, L, step_size, 
