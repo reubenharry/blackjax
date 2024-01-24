@@ -100,6 +100,9 @@ def generalized_two_stage_integrator(
         momentum_update_info = None
         position_update_info = None
         for i, coef in enumerate(coefficients[:-1]):
+
+            # logdensity_grad = logdensity_grad + 1e-3*jax.random.normal(key)
+
             if i % 2 == 0:
                 momentum, kinetic_grad, momentum_update_info = operator1(
                     momentum,
