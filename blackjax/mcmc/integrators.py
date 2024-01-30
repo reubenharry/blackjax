@@ -99,7 +99,7 @@ def generalized_two_stage_integrator(
         Integrator function.
     """
 
-    def one_step(state: IntegratorState, step_size: float, key):
+    def one_step(state: IntegratorState, step_size: float, key, noise=0.0):
         position, momentum, _, logdensity_grad = state
         # auxiliary infomation generated during integration for diagnostics. It is
         # updated by the operator1 and operator2 at each call.
@@ -107,7 +107,7 @@ def generalized_two_stage_integrator(
         position_update_info = None
         for i, coef in enumerate(coefficients[:-1]):
 
-            logdensity_grad = logdensity_grad + 1e-1*jax.random.normal(key, shape=logdensity_grad.shape)
+            logdensity_grad = logdensity_grad + noise*jax.random.normal(key, shape=logdensity_grad.shape)
             # jax.debug.print("ldg {x}", x=logdensity_grad)
 
             if i % 2 == 0:
@@ -405,12 +405,12 @@ def partially_refresh_momentum(momentum, rng_key, step_size, L):
 
 def with_isokinetic_maruyama(integrator):
     
-    def stochastic_integrator(state, step_size, L, rng_key):
+    def stochastic_integrator(state, step_size, L, rng_key, noise):
         # partial refreshment
         key1, key2, key3 = jax.random.split(rng_key, 3)
         state = state._replace(momentum=partially_refresh_momentum(momentum=state.momentum, rng_key=key1, L=L, step_size=step_size * 0.5))
         # one step of the deterministic dynamics
-        state, info = integrator(state, step_size, key3)
+        state, info = integrator(state, step_size, key3, noise=noise)
         # partial refreshment
         state = state._replace(momentum=partially_refresh_momentum(momentum=state.momentum, rng_key=key2, L=L, step_size=step_size * 0.5))
         return state, info

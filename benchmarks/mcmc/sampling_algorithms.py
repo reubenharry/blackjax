@@ -61,6 +61,8 @@ def run_mclmc(logdensity_fn, num_steps, initial_position, key):
         step_size=blackjax_mclmc_sampler_params.step_size,
     )
 
+    jax.debug.print("params {x}", x=blackjax_mclmc_sampler_params)
+
     _, samples, _ = run_inference_algorithm(
         rng_key=run_key,
         initial_state_or_position=blackjax_state_after_tuning,
@@ -69,10 +71,12 @@ def run_mclmc(logdensity_fn, num_steps, initial_position, key):
         transform=lambda x: x.position,
     )
 
-    return samples
+    avg_steps_per_traj = 1
+    return samples, avg_steps_per_traj
 
 
 def run_mhmclmc(logdensity_fn, num_steps, initial_position, key):
+
 
     init_key, tune_key, run_key = jax.random.split(key, 3)
 
@@ -129,9 +133,12 @@ def run_mhmclmc(logdensity_fn, num_steps, initial_position, key):
         transform=lambda x: x.position, 
         progress_bar=True)
     
+    
     jax.debug.print("ACCEPTANCE {x}", x = (info.acceptance_rate.shape, jnp.mean(info.acceptance_rate,)))
     
-    return out
+    # jax.debug.print("THING\n\n {x}",x=jnp.mean(info.num_integration_steps))
+    # raise Exception
+    return out, L/step_size
 
 # we should do at least: mclmc, nuts, unadjusted hmc, mhmclmc, langevin
 

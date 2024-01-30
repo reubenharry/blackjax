@@ -82,10 +82,10 @@ def build_kernel(logdensity_fn, integrator):
     step = with_isokinetic_maruyama(integrator(logdensity_fn))
 
     def kernel(
-        rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float
+        rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float, noise=0.0
     ) -> tuple[IntegratorState, MCLMCInfo]:
         (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
-            state, step_size, L, rng_key
+            state, step_size, L, rng_key, noise=noise
         )
 
         # (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
@@ -162,6 +162,7 @@ class mclmc:
         logdensity_fn: Callable,
         L,
         step_size,
+        noise=0.0,
         integrator=isokinetic_mclachlan,
     ) -> SamplingAlgorithm:
         kernel = cls.build_kernel(logdensity_fn, integrator)
@@ -170,7 +171,7 @@ class mclmc:
             return cls.init(position, logdensity_fn, rng_key)
 
         def update_fn(rng_key, state):
-            return kernel(rng_key, state, L, step_size)
+            return kernel(rng_key, state, L, step_size, noise=noise)
 
         return SamplingAlgorithm(init_fn, update_fn)
 
