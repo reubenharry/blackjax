@@ -55,6 +55,8 @@ def run_mclmc(logdensity_fn, num_steps, initial_position, key):
         rng_key=tune_key,
     )
 
+    jax.debug.print("params {x}", x=blackjax_mclmc_sampler_params)
+
     sampling_alg = blackjax.mclmc(
         logdensity_fn,
         L=blackjax_mclmc_sampler_params.L,
@@ -85,9 +87,9 @@ def run_mhmclmc(logdensity_fn, num_steps, initial_position, key):
         position=initial_position, logdensity_fn=logdensity_fn, random_generator_arg=init_key
     )
 
-    kernel = lambda rng_key, state, num_integration_steps, step_size: blackjax.mcmc.mhmclmc.build_kernel(
+    kernel = lambda rng_key, state, avg_num_integration_steps, step_size: blackjax.mcmc.mhmclmc.build_kernel(
                 integrator=blackjax.mcmc.integrators.isokinetic_mclachlan,
-                integration_steps_fn = lambda key: num_integration_steps, 
+                integration_steps_fn = lambda key: jnp.round(jax.random.uniform(key) * rescale(avg_num_integration_steps + 0.5)), 
             )(
                 rng_key=rng_key, 
                 state=state, 
