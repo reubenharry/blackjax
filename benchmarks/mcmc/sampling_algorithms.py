@@ -74,7 +74,7 @@ def run_mclmc(logdensity_fn, num_steps, initial_position, key):
     )
 
     avg_steps_per_traj = 1
-    return samples, avg_steps_per_traj
+    return samples, avg_steps_per_traj, blackjax_mclmc_sampler_params
 
 
 def run_mhmclmc(logdensity_fn, num_steps, initial_position, key):
