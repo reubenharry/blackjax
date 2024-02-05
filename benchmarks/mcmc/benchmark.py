@@ -104,7 +104,7 @@ def cumulative_avg(samples):
     
 #     return ess_per_sample
 
-def benchmark_chains(model, sampler, favg, fvar, n=10000, batch=None):
+def benchmark_chains(model, sampler, favg, fvar, n=10000, batch=None, only_tune=False):
 
 
     # print(model)
@@ -120,7 +120,7 @@ def benchmark_chains(model, sampler, favg, fvar, n=10000, batch=None):
     # keys = jnp.array([jax.random.PRNGKey(0)])
     init_pos = jax.random.normal(key=init_key, shape=(batch, d))
 
-    samples, avg_num_steps_per_traj, params = jax.vmap(lambda pos, key: sampler(logdensity_fn, n, pos, key))(init_pos, keys)
+    samples, avg_num_steps_per_traj, params = jax.vmap(lambda pos, key: sampler(logdensity_fn, n, pos, key, only_tune=only_tune))(init_pos, keys)
     avg_num_steps_per_traj = jnp.mean(avg_num_steps_per_traj, axis=0)
     print("\n\n\n\nAVG NUM STEPS PER TRAJ", avg_num_steps_per_traj)
     # print(samples[0][-1], samples[0][0], "samps chain", samples.shape)

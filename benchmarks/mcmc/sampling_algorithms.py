@@ -33,7 +33,7 @@ __all__ = ["samplers"]
 #         transform=lambda x: x.position,
 #     )
 
-def run_mclmc(logdensity_fn, num_steps, initial_position, key):
+def run_mclmc(logdensity_fn, num_steps, initial_position, key, only_tune=False):
     init_key, tune_key, run_key = jax.random.split(key, 3)
 
     initial_state = blackjax.mcmc.mclmc.init(
@@ -65,6 +65,8 @@ def run_mclmc(logdensity_fn, num_steps, initial_position, key):
 
     jax.debug.print("params {x}", x=blackjax_mclmc_sampler_params)
 
+    if only_tune: num_steps = 10
+    
     _, samples, _ = run_inference_algorithm(
         rng_key=run_key,
         initial_state_or_position=blackjax_state_after_tuning,
