@@ -114,6 +114,8 @@ def benchmark_chains(model, sampler, favg, fvar, n=10000, batch=None):
     # raise Exception
     # identity_fn = model.sample_transformations['identity']
     logdensity_fn = model.unnormalized_log_prob
+    transform = model.transform
+    
     d = get_num_latents(model)
     if batch is None:
         batch = np.ceil(1000 / d).astype(int)
@@ -122,7 +124,7 @@ def benchmark_chains(model, sampler, favg, fvar, n=10000, batch=None):
     # keys = jnp.array([jax.random.PRNGKey(0)])
     init_pos = jax.random.normal(key=init_key, shape=(batch, d))
 
-    samples, params, avg_num_steps_per_traj = jax.vmap(lambda pos, key: sampler(logdensity_fn, n, pos, key))(init_pos, keys)
+    samples, params, avg_num_steps_per_traj = jax.vmap(lambda pos, key: sampler(logdensity_fn, n, pos, key, transform))(init_pos, keys)
     avg_num_steps_per_traj = jnp.mean(avg_num_steps_per_traj, axis=0)
     # print(samples, samples.shape)
     # print("\n\n\n\nAVG NUM STEPS PER TRAJ", avg_num_steps_per_traj)

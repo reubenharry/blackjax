@@ -27,6 +27,8 @@ class Normal():
       self.name = 'normal'
       self.E_x2 = jnp.ones(ndims)
       self.Var_x2 = 2 * self.E_x2
+      self.transform = lambda x: x
+
 
     def unnormalized_log_prob(self, value):
       return -0.5 * jnp.sum(jnp.square(value))
@@ -38,6 +40,7 @@ class Banana(gym.targets.Banana):
       self.ndims = 2
       self.E_x2 = jnp.array([100.0, 19.0])
       self.Var_x2 = jnp.array([20000.0, 4600.898])
+      self.transform = lambda x: x
 
 class IllConditionedGaussian():
     """Gaussian distribution. Covariance matrix has eigenvalues equally spaced in log-space, going from 1/condition_bnumber^1/2 to condition_number^1/2."""
