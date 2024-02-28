@@ -13,7 +13,7 @@ __all__ = ["samplers"]
 
 
 def run_nuts(
-    logdensity_fn, num_steps, initial_position, key):
+    logdensity_fn, num_steps, initial_position, key, transform= lambda x: x):
     
     warmup = blackjax.window_adaptation(blackjax.nuts, logdensity_fn)
 
@@ -30,14 +30,15 @@ def run_nuts(
         initial_state_or_position=state,
         inference_algorithm=nuts,
         num_steps=num_steps,
-        transform=lambda x: x.position,
+        transform=lambda x: transform(x.position),
     )
 
     # print("INFO\n\n",info_history.num_integration_steps)
 
     return state_history, params, info_history.num_integration_steps.mean() 
 
-def run_mclmc(logdensity_fn, num_steps, initial_position, key):
+
+def run_mclmc(logdensity_fn, num_steps, initial_position, key, transform= lambda x: x):
     init_key, tune_key, run_key = jax.random.split(key, 3)
 
     initial_state = blackjax.mcmc.mclmc.init(
@@ -72,14 +73,14 @@ def run_mclmc(logdensity_fn, num_steps, initial_position, key):
         initial_state_or_position=blackjax_state_after_tuning,
         inference_algorithm=sampling_alg,
         num_steps=num_steps,
-        transform=lambda x: x.position,
+        transform= lambda x: transform(x.position),
     )
 
     avg_steps_per_traj = 1
     return samples, blackjax_mclmc_sampler_params, avg_steps_per_traj
 
 
-def run_mhmclmc(logdensity_fn, num_steps, initial_position, key):
+def run_mhmclmc(logdensity_fn, num_steps, initial_position, key, transform= lambda x: x):
 
 
     init_key, tune_key, run_key = jax.random.split(key, 3)
@@ -135,7 +136,7 @@ def run_mhmclmc(logdensity_fn, num_steps, initial_position, key):
         initial_state_or_position=blackjax_state_after_tuning,
         inference_algorithm=alg,
         num_steps=num_steps, 
-        transform=lambda x: x.position, 
+        transform=lambda x: transform(x.position), 
         progress_bar=True)
     
     
