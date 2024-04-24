@@ -1,5 +1,4 @@
 from collections import defaultdict
-from inference_gym import using_jax as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -107,7 +106,7 @@ def cumulative_avg(samples):
 #     return ess_per_sample
 
 def benchmark_chains(model, sampler, favg, fvar, n=10000, batch=None):
-
+    """batch = number of chains"""
 
     # print(model)
     # print(model.sample_transformations.keys())
@@ -152,8 +151,6 @@ def benchmark_chains(model, sampler, favg, fvar, n=10000, batch=None):
 
 if __name__ == "__main__":
 
-    # Define the models and samplers
-    # models = {'icg' : gym.targets.IllConditionedGaussian(), 'banana' : gym.targets.Banana()}
 
     # Create an empty list to store the results
     results = defaultdict(float)
@@ -162,10 +159,10 @@ if __name__ == "__main__":
     for model in ["normal"]:
         # for sampler in samplers:
         print("MODEL", model, "DIM", get_num_latents(models[model]))
-        for sampler in ["nuts"]:
+        for sampler in ["mclmc"]:
             # result = benchmark(models[model], samplers[sampler])
             
-            result = benchmark_chains(models[model], samplers[sampler], batch=100, n=10000, favg=models[model].E_x2, fvar=models[model].Var_x2)
+            result = benchmark_chains(models[model], samplers[sampler], batch=10, n=10000, favg=models[model].E_x2, fvar=models[model].Var_x2)
             # print(result, result2, "results")
             results[(model, sampler)] = result
 

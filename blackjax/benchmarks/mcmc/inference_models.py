@@ -1,4 +1,4 @@
-from inference_gym import using_jax as gym
+#from inference_gym import using_jax as gym
 import jax
 import jax.numpy as jnp
 
