@@ -55,8 +55,9 @@ class RunInferenceAlgorithmTest(chex.TestCase):
             inference_algorithm=alg,
             num_steps=50,
             progress_bar=False,
+            expectation=lambda x: x.position,
             transform=lambda x: x.position,
-            streaming=True,
+            return_state_history=False,
         )
 
         _, states, _ = run_inference_algorithm(
@@ -65,8 +66,9 @@ class RunInferenceAlgorithmTest(chex.TestCase):
             inference_algorithm=alg,
             num_steps=50,
             progress_bar=False,
+            expectation=lambda x: x.position,
             transform=lambda x: x.position,
-            streaming=False,
+            return_state_history=True,
         )
 
         assert jnp.allclose(states.mean(axis=0), average)
