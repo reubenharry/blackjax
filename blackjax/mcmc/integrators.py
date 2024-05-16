@@ -312,7 +312,7 @@ omelyan = generate_euclidean_integrator(omelyan_coefficients)
 
 # Intergrators with non Euclidean updates
 def _normalized_flatten_array(x, tol=1e-13):
-    norm = jnp.linalg.norm(x)
+    norm = jnp.sqrt(jnp.average(jnp.square(x)))
     return jnp.where(norm > tol, x / norm, x), norm
 
 
@@ -339,8 +339,8 @@ def esh_dynamics_momentum_update_one_step(std_mat):
         flatten_momentum, _ = ravel_pytree(momentum)
         dims = flatten_momentum.shape[0]
         normalized_gradient, gradient_norm = _normalized_flatten_array(flatten_grads)
-        momentum_proj = jnp.dot(flatten_momentum, normalized_gradient)
-        delta = step_size * coef * gradient_norm / (dims - 1)
+        momentum_proj = jnp.average(flatten_momentum * normalized_gradient)
+        delta = step_size * coef * gradient_norm * dims / (dims - 1)
         zeta = jnp.exp(-delta)
         new_momentum_raw = (
             normalized_gradient * (1 - zeta) * (1 + zeta + momentum_proj * (1 - zeta))
@@ -401,7 +401,7 @@ isokinetic_mclachlan = generate_isokinetic_integrator(mclachlan_coefficients)
 isokinetic_omelyan = generate_isokinetic_integrator(omelyan_coefficients)
 
 
-def partially_refresh_momentum(momentum, rng_key, step_size, L):
+def partially_refresh_momentum(momentum, rng_key, steps_until_decoherence):
     """Adds a small noise to momentum and normalizes.
 
     Parameters
@@ -410,32 +410,28 @@ def partially_refresh_momentum(momentum, rng_key, step_size, L):
         The pseudo-random number generator key used to generate random numbers.
     momentum
         PyTree that the structure the output should to match.
-    step_size
-        Step size
-    L
-        controls rate of momentum change
-
+    steps_unitl_decoherence
+        steps until momentum coherence is lost. Similar to the integration steps / trajectory in MCHMC/HMC.
     Returns
     -------
     momentum with random change in angle
     """
     m, unravel_fn = ravel_pytree(momentum)
-    dim = m.shape[0]
-    nu = jnp.sqrt((jnp.exp(2 * step_size / L) - 1.0) / dim)
-    z = nu * normal(rng_key, shape=m.shape, dtype=m.dtype)
-    return unravel_fn((m + z) / jnp.linalg.norm(m + z))
+    c1 = jnp.exp(- 1./steps_until_decoherence)
+    c2 = jnp.sqrt(1 - jnp.square(c1))
+    momentum_new_unnormalized = c1 * m + c2 * normal(rng_key, shape=m.shape, dtype=m.dtype)
+    return unravel_fn(momentum_new_unnormalized / jnp.sqrt(jnp.average(jnp.square(momentum_new_unnormalized))))
 
 
 def with_isokinetic_maruyama(integrator):
-    def stochastic_integrator(init_state, step_size, L_proposal, rng_key):
+    def stochastic_integrator(init_state, step_size, steps_until_decoherence, rng_key):
         key1, key2 = jax.random.split(rng_key)
         # partial refreshment
         state = init_state._replace(
             momentum=partially_refresh_momentum(
                 momentum=init_state.momentum,
                 rng_key=key1,
-                L=L_proposal,
-                step_size=step_size * 0.5,
+                steps_until_decoherence= steps_until_decoherence * 2
             )
         )
         # one step of the deterministic dynamics
@@ -445,8 +441,7 @@ def with_isokinetic_maruyama(integrator):
             momentum=partially_refresh_momentum(
                 momentum=state.momentum,
                 rng_key=key2,
-                L=L_proposal,
-                step_size=step_size * 0.5,
+                steps_until_decoherence= steps_until_decoherence * 2
             )
         )
         return state, info

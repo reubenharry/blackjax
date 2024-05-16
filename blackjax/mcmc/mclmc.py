@@ -23,7 +23,7 @@ from blackjax.mcmc.integrators import (
     with_isokinetic_maruyama,
 )
 from blackjax.types import ArrayLike, PRNGKey
-from blackjax.util import generate_unit_vector, pytree_size
+from blackjax.util import generate_sphercial_vector, pytree_size
 
 __all__ = ["MCLMCInfo", "init", "build_kernel", "as_top_level_api"]
 
@@ -54,7 +54,7 @@ def init(position: ArrayLike, logdensity_fn, rng_key):
 
     return IntegratorState(
         position=position,
-        momentum=generate_unit_vector(rng_key, position),
+        momentum=generate_sphercial_vector(rng_key, position),
         logdensity=l,
         logdensity_grad=g,
     )
@@ -67,8 +67,8 @@ def build_kernel(logdensity_fn, std_mat, integrator):
     ----------
     integrator
         The symplectic integrator to use to integrate the Hamiltonian dynamics.
-    L
-        the momentum decoherence rate.
+    steps_until_decoherence
+        similar to number of steps/trajectory in MCHMC and HMC.
     step_size
         step size of the integrator.
 
@@ -83,10 +83,10 @@ def build_kernel(logdensity_fn, std_mat, integrator):
     step = with_isokinetic_maruyama(integrator(logdensity_fn, std_mat))
 
     def kernel(
-        rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float
+        rng_key: PRNGKey, state: IntegratorState, steps_until_decoherence: float, step_size: float
     ) -> tuple[IntegratorState, MCLMCInfo]:
         (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
-            state, step_size, L, rng_key
+            state, step_size, steps_until_decoherence, rng_key
         )
 
         return IntegratorState(
@@ -102,7 +102,7 @@ def build_kernel(logdensity_fn, std_mat, integrator):
 
 def as_top_level_api(
     logdensity_fn: Callable,
-    L,
+    steps_until_decoherence,
     step_size,
     integrator=isokinetic_mclachlan,
     std_mat=1.0,
@@ -124,7 +124,7 @@ def as_top_level_api(
 
         mclmc = blackjax.mcmc.mclmc.mclmc(
             logdensity_fn=logdensity_fn,
-            L=L,
+            steps_until_decoherence=steps_until_decoherence,
             step_size=step_size
         )
         state = mclmc.init(position)
@@ -141,8 +141,8 @@ def as_top_level_api(
     ----------
     logdensity_fn
         The log-density function we wish to draw samples from.
-    L
-        the momentum decoherence rate
+    steps_until_decoherence
+        similar to number of steps/trajectory in MCHMC and HMC.
     step_size
         step size of the integrator
     integrator
@@ -159,6 +159,6 @@ def as_top_level_api(
         return init(position, logdensity_fn, rng_key)
 
     def update_fn(rng_key, state):
-        return kernel(rng_key, state, L, step_size)
+        return kernel(rng_key, state, steps_until_decoherence, step_size)
 
     return SamplingAlgorithm(init_fn, update_fn)

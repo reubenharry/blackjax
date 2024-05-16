@@ -85,11 +85,11 @@ def generate_gaussian_noise(
     return unravel_fn(mu + linear_map(sigma, sample))
 
 
-def generate_unit_vector(
+def generate_spherical_vector(
     rng_key: PRNGKey,
     position: ArrayLikeTree,
 ) -> Array:
-    """Generate a random unit vector with output structure that match a given PyTree.
+    """Generate a random vector with norm = sqrt(size(vector)) and output structure matching a given PyTree.
 
     Parameters
     ----------
@@ -100,11 +100,11 @@ def generate_unit_vector(
 
     Returns
     -------
-    Random unit vector that match the structure of position.
+    Random normalized vector that match the structure of position.
     """
     p, unravel_fn = ravel_pytree(position)
     sample = normal(rng_key, shape=p.shape, dtype=p.dtype)
-    return unravel_fn(sample / jnp.linalg.norm(sample))
+    return unravel_fn(sample / jnp.sqrt(jnp.average(jnp.square(sample))))
 
 
 def pytree_size(pytree: ArrayLikeTree) -> int:

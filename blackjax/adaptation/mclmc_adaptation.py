@@ -11,7 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Algorithms to adapt the MCLMC kernel parameters, namely step size and L."""
+"""Algorithms to adapt the MCLMC kernel parameters, namely step size and momentum decoherence rate
+."""
 
 from typing import NamedTuple
 
@@ -30,15 +31,15 @@ from blackjax.util import pytree_size, streaming_average
 class MCLMCAdaptationState(NamedTuple):
     """Represents the tunable parameters for MCLMC adaptation.
 
-    L
-        The momentum decoherent rate for the MCLMC algorithm.
+    steps_until_decoherence
+        similar to number of steps/trajectory in MCHMC and HMC.
     step_size
         The step size used for the MCLMC algorithm.
     std_mat
         A matrix used for preconditioning.
     """
 
-    L: float
+    steps_until_decoherence: float
     step_size: float
     std_mat: float
 
@@ -88,7 +89,7 @@ def mclmc_find_L_and_step_size(
     """
     dim = pytree_size(state.position)
     params = MCLMCAdaptationState(
-        jnp.sqrt(dim), jnp.sqrt(dim) * 0.25, std_mat=jnp.ones((dim,))
+        4., 0.25, std_mat=jnp.ones((dim,))
     )
     part1_key, part2_key = jax.random.split(rng_key, 2)
 
@@ -121,7 +122,7 @@ def make_L_step_size_adaptation(
     trust_in_estimate=1.5,
     num_effective_samples=150,
 ):
-    """Adapts the stepsize and L of the MCLMC kernel. Designed for the unadjusted MCLMC"""
+    """Adapts the stepsize and momentum decoherence rate of the MCLMC kernel. Designed for the unadjusted MCLMC"""
 
     decay_rate = (num_effective_samples - 1.0) / (num_effective_samples + 1.0)
 
@@ -135,7 +136,7 @@ def make_L_step_size_adaptation(
         next_state, info = kernel(params.std_mat)(
             rng_key=rng_key,
             state=previous_state,
-            L=params.L,
+            steps_until_decoherence=params.steps_until_decoherence,
             step_size=params.step_size,
         )
         # step updating
@@ -220,18 +221,18 @@ def make_L_step_size_adaptation(
             xs=(mask, L_step_size_adaptation_keys),
         )[0]
 
-        L = params.L
+        steps_until_decoherence = params.steps_until_decoherence
         # determine L
         std_mat = params.std_mat
         if num_steps2 != 0.0:
             x_average, x_squared_average = average[0], average[1]
             variances = x_squared_average - jnp.square(x_average)
-            L = jnp.sqrt(jnp.sum(variances))
+            steps_until_decoherence = jnp.sqrt(jnp.average(variances)) / params.step_size
 
             if diagonal_preconditioning:
                 std_mat = jnp.sqrt(variances)
                 params = params._replace(std_mat=std_mat)
-                L = jnp.sqrt(dim)
+                steps_until_decoherence = 1./params.step_size
 
                 # readjust the stepsize
                 steps = num_steps2 // 3  # we do some small number of steps
@@ -247,7 +248,7 @@ def make_L_step_size_adaptation(
                     xs=(jnp.ones(steps), keys),
                 )[0]
 
-        return state, MCLMCAdaptationState(L, params.step_size, std_mat)
+        return state, MCLMCAdaptationState(steps_until_decoherence, params.step_size, std_mat)
 
     return L_step_size_adaptation
 
@@ -263,7 +264,7 @@ def make_adaptation_L(kernel, frac, Lfactor):
             next_state, _ = kernel(
                 rng_key=key,
                 state=state,
-                L=params.L,
+                steps_until_decoherence=params.steps_until_decoherence,
                 step_size=params.step_size,
             )
 
@@ -279,7 +280,7 @@ def make_adaptation_L(kernel, frac, Lfactor):
         ess = effective_sample_size(flat_samples[None, ...])
 
         return state, params._replace(
-            L=Lfactor * params.step_size * jnp.mean(num_steps / ess)
+            steps_until_decoherence= Lfactor * jnp.mean(num_steps / ess)
         )
 
     return adaptation_L
@@ -337,7 +338,7 @@ def adjusted_mclmc_find_L_and_step_size(
     dim = pytree_size(state.position)
     if params is None:
         params = MCLMCAdaptationState(
-            jnp.sqrt(dim), jnp.sqrt(dim) * 0.2, std_mat=jnp.ones((dim,))
+            1./0.2, 0.2, std_mat=jnp.ones((dim,))
         )
     else:
         params = params
@@ -378,7 +379,7 @@ def adjusted_mclmc_find_L_and_step_size(
             frac_tune1=frac_tune1,
             frac_tune2=0,
             target=target,
-            fix_L_first_da=True,
+            fix_trajectory_length_first_da=True,
             diagonal_preconditioning=diagonal_preconditioning,
         )(
             state, params, num_steps, part2_key2
@@ -394,11 +395,11 @@ def adjusted_mclmc_make_L_step_size_adaptation(
     frac_tune2,
     target,
     diagonal_preconditioning,
-    fix_L_first_da=False,
+    fix_trajectory_length_first_da=False,
 ):
     """Adapts the stepsize and L of the MCLMC kernel. Designed for the unadjusted MCLMC"""
 
-    def dual_avg_step(fix_L, update_da):
+    def dual_avg_step(fix_trajectory_length, update_da):
         """does one step of the dynamics and updates the estimate of the posterior size and optimal stepsize"""
 
         def step(iteration_state, weight_and_key):
@@ -411,12 +412,11 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                 streaming_avg,
             ) = iteration_state
 
-            avg_num_integration_steps = params.L / params.step_size
 
             state, info = kernel(
                 rng_key=kernel_key,
                 state=previous_state,
-                avg_num_integration_steps=avg_num_integration_steps,
+                avg_num_integration_steps=params.steps_until_decoherence,
                 step_size=params.step_size,
                 std_mat=params.std_mat,
             )
@@ -455,7 +455,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             # step_size = jax.lax.clamp(1e-3, jnp.exp(adaptive_state.log_step_size), 1e0)
             # step_size = jax.lax.clamp(1e-5, jnp.exp(adaptive_state.log_step_size), step_size_max)
             step_size = jax.lax.clamp(
-                1e-5, jnp.exp(adaptive_state.log_step_size), params.L / 1.1
+                1e-5, jnp.exp(adaptive_state.log_step_size), params.steps_until_decoherence * params.step_size / 1.1
             )
             adaptive_state = adaptive_state._replace(log_step_size=jnp.log(step_size))
             # step_size = 1e-3
@@ -469,18 +469,18 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                 zero_prevention=mask,
             )
 
-            if fix_L:
+            if fix_trajectory_length:
                 params = params._replace(
                     step_size=mask * step_size + (1 - mask) * params.step_size,
-                    # L=mask * ((params.L * (step_size / params.step_size))) + (1-mask)*params.L
-                    # L=mask * ((params.L * (step_size / params.step_size))) + (1-mask)*params.L
+                    steps_until_decoherence=mask * (params.steps_until_decoherence * params.step_size / step_size)
+                    + (1 - mask) * params.steps_until_decoherence
                 )
+                
 
             else:
                 params = params._replace(
                     step_size=mask * step_size + (1 - mask) * params.step_size,
-                    L=mask * (params.L * (step_size / params.step_size))
-                    + (1 - mask) * params.L
+                    # L=mask * ((params.L * (step_size / params.step_size))) + (1-mask)*params.L
                     # L=mask * ((params.L * (step_size / params.step_size))) + (1-mask)*params.L
                 )
             # params = params._replace(step_size=step_size,
@@ -494,9 +494,9 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
         return step
 
-    def step_size_adaptation(mask, state, params, keys, fix_L, initial_da, update_da):
+    def step_size_adaptation(mask, state, params, keys, fix_trajectory_length, initial_da, update_da):
         return jax.lax.scan(
-            dual_avg_step(fix_L, update_da),
+            dual_avg_step(fix_trajectory_length, update_da),
             init=(
                 state,
                 params,
@@ -535,7 +535,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             state,
             params,
             L_step_size_adaptation_keys_pass1,
-            fix_L=fix_L_first_da,
+            fix_trajectory_length=fix_trajectory_length_first_da,
             initial_da=initial_da,
             update_da=update_da,
         )
@@ -564,15 +564,17 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
             change = jax.lax.clamp(
                 Lratio_lowerbound,
-                jnp.sqrt(jnp.sum(variances)) / params.L,
+                jnp.sqrt(jnp.average(variances)) / params.steps_until_decoherence,
                 Lratio_upperbound,
             )
             # change = jnp.sqrt(jnp.sum(variances))/params.L
             # jax.debug.print("{x} L ratio, old val,  new val",x=(change, params.L, params.L*change))
             # jax.debug.print("{x} variance",x=(jnp.sqrt(jnp.sum(variances))))
             params = params._replace(
-                L=params.L * change, step_size=params.step_size * change
+                steps_until_decoherence=params.steps_until_decoherence * change, step_size=params.step_size
             )
+            # Reuben: step_size was multiplied by change. Was this because you wanted to keep steps_unitl_decoherence fixed?
+            
             # params = params._replace(L=16.)
             # params = params._replace(L=jnp.sqrt(jnp.sum(variances)))
             # jax.debug.print("{x} params after a round of tuning",x=(params))
@@ -596,7 +598,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                 state,
                 params,
                 L_step_size_adaptation_keys_pass2,
-                fix_L=True,
+                fix_trajectory_length=True,
                 update_da=update_da,
                 initial_da=initial_da,
             )
@@ -641,7 +643,7 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor):
 
         change = jax.lax.clamp(
             Lratio_lowerbound,
-            (Lfactor * params.step_size * jnp.mean(num_steps / ess)) / params.L,
+            (Lfactor * jnp.mean(num_steps / ess)) / params.steps_until_decoherence,
             Lratio_upperbound,
         )
         # change = (Lfactor * params.step_size * jnp.mean(num_steps / ess))/params.L
@@ -649,8 +651,7 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor):
         # jax.debug.print("tune 3\n\n {x}", x=(params.L*change, change))
         return state, params._replace(
             # L=Lfactor * params.step_size * jnp.mean(num_steps / ess)
-            L=params.L
-            * change
+            steps_until_decoherence=params.steps_until_decoherence * change
         )
 
     return adaptation_L

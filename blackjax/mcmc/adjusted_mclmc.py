@@ -23,7 +23,7 @@ from blackjax.mcmc.dynamic_hmc import DynamicHMCState, halton_sequence
 from blackjax.mcmc.hmc import HMCInfo
 from blackjax.mcmc.proposal import static_binomial_sampling
 from blackjax.types import Array, ArrayLikeTree, ArrayTree, PRNGKey
-from blackjax.util import generate_unit_vector
+from blackjax.util import generate_spherical_vector
 
 __all__ = ["init", "build_kernel", "as_top_level_api"]
 
@@ -67,22 +67,22 @@ def build_kernel(
         state: DynamicHMCState,
         logdensity_fn: Callable,
         step_size: float,
-        L_proposal: float = 1.0,
+        steps_until_decoherence_proposal: float = 1.0,
     ) -> tuple[DynamicHMCState, HMCInfo]:
         """Generate a new sample with the MHMCHMC kernel."""
 
         num_integration_steps = integration_steps_fn(state.random_generator_arg)
 
         key_momentum, key_integrator = jax.random.split(rng_key, 2)
-        momentum = generate_unit_vector(key_momentum, state.position)
+        momentum = generate_spherical_vector(key_momentum, state.position)
 
         proposal, info, _ = adjusted_mclmc_proposal(
             # integrators.with_isokinetic_maruyama(integrator(logdensity_fn)),
-            lambda state, step_size, L_prop, key: (integrator(logdensity_fn, std_mat))(
+            lambda state, step_size, steps_until_decoherence_prop, key: (integrator(logdensity_fn, std_mat))(
                 state, step_size
             ),
             step_size,
-            L_proposal,
+            steps_until_decoherence_proposal,
             num_integration_steps,
             divergence_threshold,
         )(
@@ -108,7 +108,7 @@ def build_kernel(
 def as_top_level_api(
     logdensity_fn: Callable,
     step_size: float,
-    L_proposal: float = 0.6,
+    steps_until_decoherence_proposal: float = 0.6,
     std_mat=1.0,
     *,
     divergence_threshold: int = 1000,
@@ -159,7 +159,7 @@ def as_top_level_api(
             state,
             logdensity_fn,
             step_size,
-            L_proposal,
+            steps_until_decoherence_proposal,
         )
 
     return SamplingAlgorithm(init_fn, update_fn)  # type: ignore[arg-type]
@@ -168,7 +168,7 @@ def as_top_level_api(
 def adjusted_mclmc_proposal(
     integrator: Callable,
     step_size: Union[float, ArrayLikeTree],
-    L_proposal: float,
+    steps_until_decoherence_proposal: float,
     num_integration_steps: int = 1,
     divergence_threshold: float = 1000,
     *,
@@ -205,7 +205,7 @@ def adjusted_mclmc_proposal(
         state, kinetic_energy, rng_key = vars
         rng_key, next_rng_key = jax.random.split(rng_key)
         next_state, next_kinetic_energy = integrator(
-            state, step_size, L_proposal, rng_key
+            state, step_size, steps_until_decoherence_proposal, rng_key
         )
 
         return next_state, kinetic_energy + next_kinetic_energy, next_rng_key
