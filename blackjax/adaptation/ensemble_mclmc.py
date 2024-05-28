@@ -78,7 +78,7 @@ def init(num_steps, steps_per_sample, adap_state, d, mclachlan):
 def stage2(logdensity_fn, integrator, num_samples, parallelization, 
            init_state, rng_key, 
            steps_per_sample, Lpartial, step_size,
-           acc_prob_target= 0.7,
+           acc_prob_target= 0.9,
            observables= jnp.square):
     """observables: function taking position x and outputing O(x), can be vector valued."""
     

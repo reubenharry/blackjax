@@ -106,55 +106,7 @@ def sampler_mhmclmc(step_size, L):
     return s
 
 
-# Empirical mean [ 2.6572839e-05 -4.0523437e-06]
-# Empirical std [0.07159886 0.07360378]
 
-def grid_search(n=10000, model='icg'):
-
-    print(f"\nModel: {model}")
-
-    results = defaultdict(float)
-            
-    # result, _, center_L, center_step_size = benchmark_chains(models[model], samplers["mclmc"], n=100000, batch=10, favg=models[model].E_x2, fvar=models[model].Var_x2)
-
-    print(f"initial params found by MCLMC {center_step_size, center_L} (with ESS {result.item()})")
-    
-    print("\nBeginning grid search:\n")
-    for i in range(3):
-        for step_size, L in itertools.product(np.logspace(np.log10(center_step_size/2), np.log10(center_step_size*2), 9), np.logspace(np.log10(center_L/2), np.log10(center_L*2),9)):
-        
-        # result, bias = benchmark_chains(models[model], sampler_mhmclmc_with_tuning(step_size, L), n=n00, batch=1)
-        # result, bias = benchmark_chains(models[model], samplers['mclmc'], n=n00, batch=10, favg=models[model].E_x2, fvar=models[model].Var_x2)
-        # results[(model, "mclmc")] = result.item()
-
-
-        # result, bias = benchmark_chains(models[model], sampler_mhmclmc_with_tuning(jnp.sqrt(models[model].ndims)/4, jnp.sqrt(models[model].ndims), frac_tune2=0.1, frac_tune3=0.1), n=n, batch=10,favg=models[model].E_x2, fvar=models[model].Var_x2)
-        # result, bias = benchmark_chains(models[model], sampler_mhmclmc_with_tuning(step_size=3.4392192, L=2.7043579, frac_tune2=0.1, frac_tune3=0.1), n=n, batch=10,favg=models[model].E_x2, fvar=models[model].Var_x2)
-            
-            result, bias, _, _ = benchmark_chains(models[model], sampler_mhmclmc(step_size=step_size, L=L), n=n, batch=100,favg=models[model].E_x2, fvar=models[model].Var_x2)
-            # result, bias = benchmark_chains(models[model], samplers[sampler], n=10000, batch=200, favg=models[model].E_x2, fvar=models[model].Var_x2)
-            results[(step_size, L)] = result.item()
-        
-        val, (step_size, L) = max([(results[r], r) for r in results], key=operator.itemgetter(0))
-
-        center_L, center_step_size = L, step_size
-
-        print(f"best params on iteration {i} are {step_size, L} with ESS {val}")
-
-
-        # for step_size, L in make_grid(center_L=21.48713, center_step_size= 2.2340074):
-        #     result, bias = benchmark_chains(models[model], sampler_mhmclmc(step_size=step_size, L=L), n=10000, batch=100,favg=models[model].E_x2, fvar=models[model].Var_x2)
-        #     # result, bias = benchmark_chains(models[model], samplers["mhmclmc"], n=1000000, batch=10)
-            # results[(model, "mhmclmc")] = result.item()
-
-    # for step in grid:
-
-
-
-    return results
-
-def make_grid(center_L, center_step_size):
-    return itertools.product(np.linspace(center_step_size-1, center_step_size+1, 10), np.linspace(center_L-1, center_L+1, 10))
 
 if __name__ == "__main__":
 
