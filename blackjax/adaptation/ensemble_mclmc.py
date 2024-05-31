@@ -78,7 +78,7 @@ def init(num_steps, steps_per_sample, adap_state, d, mclachlan):
 def stage2(logdensity_fn, integrator, num_samples, parallelization, 
            init_state, rng_key, 
            steps_per_sample, Lpartial, step_size,
-           acc_prob_target= 0.9,
+           acc_prob_target= 0.7,
            observables= jnp.square):
     """observables: function taking position x and outputing O(x), can be vector valued."""
     
@@ -95,7 +95,8 @@ def stage2(logdensity_fn, integrator, num_samples, parallelization,
         sequential_kernel = mhmclmc.mhmclmc_proposal(with_isokinetic_maruyama(integrator(logdensity_fn)),
                                                      adap.step_size, adap.Lpartial, steps_per_sample)
         kernel = parallelization.pvmap(sequential_kernel, (0, 0))
-        state, info, _ = kernel(jax.random.split(key1, parallelization.shape), state)
+        keys1 = jax.random.split(key1, parallelization.num_chains).reshape(parallelization.shape)
+        state, info, _ = kernel(keys1, state)
 
         # change the stepsize
         acc_prob = jnp.average(info.acceptance_rate)
@@ -135,13 +136,13 @@ def algorithm(logdensity_fn, num_steps, parallelization,
 
     state, adap_state, key = state_all
     
-    # readjust the hyperparameters
+    # # readjust the hyperparameters
     hyp = adap_state.hyperparameters
     adap_state = adap_state._replace(hyperparameters= hyp._replace(L= hyp.step_size * num_steps_per_sample))
     
     integrator, num_samples, steps_per_sample, step_size, Lpartial = init(num_steps, num_steps_per_sample, adap_state, d, mclachlan)
 
-    # refine the results with the adjusted method
+    # # refine the results with the adjusted method
     state_final, info2 = stage2(logdensity_fn, integrator, num_samples, parallelization, 
                                 state, key, 
                                 steps_per_sample, Lpartial, step_size,

@@ -19,7 +19,7 @@ from jax.flatten_util import ravel_pytree
 from typing import Callable, NamedTuple, Any
 
 from blackjax.mcmc.integrators import IntegratorState, isokinetic_mclachlan, isokinetic_leapfrog
-from blackjax.types import Array, ArrayLike, PRNGKey
+from blackjax.types import Array, ArrayLike
 from blackjax.util import pytree_size
 
 from blackjax.mcmc import mclmc
@@ -53,7 +53,7 @@ class Parallelization():
         self.num_chains = pmap_chains * vmap_chains
         
         if (pmap_chains != 1) and (vmap_chains != 1): # both vmap and pmap are to be applied
-            self.pvmap = lambda func, in_axes: jax.pmap(jax.vmap(func, in_axes= in_axes), in_axes= in_axes)
+            self.pvmap = lambda func, in_axes=0: jax.pmap(jax.vmap(func, in_axes= in_axes), in_axes= in_axes)
             self.axis = (0, 1)
             self.shape = (pmap_chains, vmap_chains)
             self.flatten = lambda x: x.reshape(self.num_chains, *x.shape[2:])
@@ -64,9 +64,9 @@ class Parallelization():
             self.flatten = lambda x: x
             
             if vmap_chains == 1:
-                self.pvmap = lambda func, in_axes: jax.pmap(func, in_axes= in_axes)
+                self.pvmap = lambda func, in_axes=0: jax.pmap(func, in_axes= in_axes)
             else:
-                self.pvmap = lambda func, in_axes: jax.vmap(func, in_axes= in_axes)
+                self.pvmap = lambda func, in_axes=0: jax.vmap(func, in_axes= in_axes)
             
         
             
@@ -142,11 +142,12 @@ def equipartition_fullrank(position, logdensity_grad, rng_key, parallelization):
         Loss is computed with the Hutchinson's trick."""
     
     _position = parallelization.flatten(position)
-    
-    d = ravel_pytree(_position)[0].shape[0] // parallelization.chains # number of dimensions
+    _logdensity_grad = parallelization.flatten(logdensity_grad)
+
+    d = ravel_pytree(_position)[0].shape[0] // parallelization.num_chains # number of dimensions
 
     z = jax.random.rademacher(rng_key, (100, d)) # <z_i z_j> = delta_ij
-    X = z + (logdensity_grad @ z.T).T @ _position / parallelization.chains
+    X = z + (_logdensity_grad @ z.T).T @ _position / parallelization.num_chains
     return jnp.average(jnp.square(X)) / d
 
     
@@ -203,7 +204,7 @@ def build_kernel1(sequential_mclmc_kerel, max_iter, parallelization, fullrank, d
         state, adap_state, rng_key = state_all
         hyp = adap_state.hyperparameters
         rng_key_new, key_kernel, key_hutchinson = jax.random.split(rng_key, 3)
-        keys_kernel = jax.random.split(key_kernel, parallelization.shape)
+        keys_kernel = jax.random.split(key_kernel, parallelization.num_chains).reshape(parallelization.shape)
         
         # apply one step of the dynamics
         _state, info = mclmc_kernel(keys_kernel, state, hyp.L, hyp.step_size)
@@ -274,7 +275,7 @@ def stage1(logdensity_fn, num_steps, parallelization, initial_position, rng_key,
     """observable: function taking position x and outputing O(x)."""
     
 
-    d = ravel_pytree(initial_position)[0].shape[0] // parallelization.chains # number of dimensions
+    d = ravel_pytree(initial_position)[0].shape[0] // parallelization.num_chains # number of dimensions
     
     # kernel    
     sequential_kernel = mclmc.build_kernel(logdensity_fn= logdensity_fn, integrator= isokinetic_leapfrog)
