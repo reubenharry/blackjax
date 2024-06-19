@@ -150,6 +150,7 @@ def run_inference_algorithm(
     initial_position: ArrayLikeTree = None,
     progress_bar: bool = False,
     transform: Callable = lambda x: x,
+    f : Callable = lambda x : x,
     return_state_history=True,
     expectation: Callable = lambda x: x,
 ) -> tuple:
@@ -220,7 +221,7 @@ def run_inference_algorithm(
         if return_state:
             return (average, state), (transform(state), info)
         else:
-            return (average, state), None
+            return (average, state), f(average[1])
 
     one_step = jax.jit(partial(one_step, return_state=return_state_history))
 
@@ -233,7 +234,7 @@ def run_inference_algorithm(
     )
 
     if not return_state_history:
-        return average, transform(final_state)
+        return average, transform(final_state), history
     else:
         state_history, info_history = history
         return transform(final_state), state_history, info_history
