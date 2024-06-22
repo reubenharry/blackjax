@@ -149,8 +149,6 @@ def run_inference_algorithm(
     initial_position: ArrayLikeTree = None,
     progress_bar: bool = False,
     transform: Callable = lambda x: x,
-    return_state_history=True,
-    expectation: Callable = lambda x: x,
 ) -> tuple:
     """Wrapper to run an inference algorithm.
 
@@ -183,13 +181,9 @@ def run_inference_algorithm(
 
     Returns
     -------
-    If return_state_history is True:
         1. The final state.
-        2. The trace of the state.
+        2. The trace of the transform(state)
         3. The trace of the info of the inference algorithm for diagnostics.
-    If return_state_history is False:
-        1. This is the expectation of state over the chain. Otherwise the final state.
-        2. The final state of the inference algorithm.
     """
 
     if initial_state is None and initial_position is None:
@@ -205,31 +199,54 @@ def run_inference_algorithm(
 
     keys = split(rng_key, num_steps)
 
-    def one_step(average_and_state, xs, return_state):
-        _, rng_key = xs
-        average, state = average_and_state
+    def one_step(state, rng_key):
         state, info = inference_algorithm.step(rng_key, state)
-        average = streaming_average(expectation(transform(state)), average)
-        if return_state:
-            return (average, state), (transform(state), info)
-        else:
-            return (average, state), None
-
-    one_step = jax.jit(partial(one_step, return_state=return_state_history))
-
+        return state, transform(state, info)
+        
     if progress_bar:
         one_step = progress_bar_scan(num_steps)(one_step)
 
-    xs = (jnp.arange(num_steps), keys)
-    ((_, average), final_state), history = lax.scan(
-        one_step, ((0, expectation(transform(initial_state))), initial_state), xs
+    final_state, history = lax.scan(
+        one_step, initial_state, keys
     )
+    
+    return final_state, history
 
-    if not return_state_history:
-        return average, transform(final_state)
-    else:
-        state_history, info_history = history
-        return transform(final_state), state_history, info_history
+
+def store_only_expectation_values(sampling_algorithm, state_transform= lambda x: x, exp_vals_transform= lambda x: x):
+    """Takes a sampling algorithm and constructs from it a new sampling algorithm object, which the same kernel but only stores
+        the streaming value of expectation values of observable, not the full states; to save memory.
+        
+       Intended usage example, for computing Trace[covariance matrix]
+       
+       observable = lambda x: jnp.outer(x.position, x.position) # a matrix with entries x_i x_j 
+       trace = lambda matrix: jnp.sum(jnp.diag(matrix))
+       
+       memory_efficient_sampling_alg, transform = store_only_expectation_values(sampling_alg, state_transform= observable, exp_vals_transform= trace)
+       
+       final_state, trace_at_every_step = run_inference_algorithm(
+                                                rng_key, memory_efficient_sampling_alg, 
+                                                num_steps, init_position, transform= transform
+       )
+                  
+    """
+    
+    def init_fn(position, rng_key):
+        state= sampling_algorithm.init(position, rng_key)
+        averaging_state = (0., state_transform(state))
+        return (state, averaging_state)
+
+    def update_fn(rng_key, state_full):
+        state, averaging_state = state_full
+        state = sampling_algorithm.step(rng_key, state) # update the state with the sampling algorithm
+        averaging_state = streaming_average(state_transform(state), averaging_state) # update the expectation value with the Kalman filter
+        return (state, averaging_state)
+
+    # full state = (state, (weights, avg)), info
+    transform= lambda full_state: exp_vals_transform(full_state[0][1][1]) # = avg
+
+    return SamplingAlgorithm(init_fn, update_fn), transform
+    
 
 
 def streaming_average(expectation, streaming_avg, weight=1.0, zero_prevention=0.0):
