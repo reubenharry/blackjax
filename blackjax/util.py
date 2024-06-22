@@ -214,10 +214,12 @@ def run_inference_algorithm(
 
 
 def store_only_expectation_values(sampling_algorithm, state_transform= lambda x: x, exp_vals_transform= lambda x: x):
-    """Takes a sampling algorithm and constructs from it a new sampling algorithm object, which the same kernel but only stores
-        the streaming value of expectation values of observable, not the full states; to save memory.
-        
-       Intended usage example, for computing Trace[covariance matrix]
+    """Takes a sampling algorithm and constructs from it a new sampling algorithm object. The new sampling algorithm has the same 
+        kernel but only stores the streaming expectation values of some observables, not the full states; to save memory.
+
+       It saves exp_vals_transform(E[state_transform(x)]) at each step i, where expectation is computed with samples up to i-th sample.
+       
+       Example usage: Computing Trace[covariance matrix]. Note that this is a scalar, unlike the full covariance matrix which can be very large.
        
        observable = lambda x: jnp.outer(x.position, x.position) # a matrix with entries x_i x_j 
        trace = lambda matrix: jnp.sum(jnp.diag(matrix))
