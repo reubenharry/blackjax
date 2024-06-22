@@ -243,11 +243,11 @@ def kernel_with_observables(kernel, observables):
 
 
 def stage1(logdensity_fn, num_steps, chains, initial_position, rng_key, 
+            observables,
             delay_frac = 0.05,
             C = 0.1,
             alpha = 1.,
-            fullrank = False,
-            observables= jnp.square):
+            fullrank = False):
     """observable: function taking position x and outputing O(x)."""
     
 
@@ -261,7 +261,9 @@ def stage1(logdensity_fn, num_steps, chains, initial_position, rng_key,
     kernel = build_kernel1(sequential_kernel, max_iter, chains, fullrank, d, alpha, C)
 
     # initialize 
+    print('is state too large?')
     state = init(position=initial_position, logdensity_fn=logdensity_fn)
+    print('no')    
     adap_state = init_adap(num_steps, chains, delay_frac, state.position, alpha, d)
 
     state_all = (state, adap_state, rng_key)

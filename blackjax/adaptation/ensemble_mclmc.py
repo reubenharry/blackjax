@@ -123,29 +123,29 @@ def stage2(logdensity_fn, integrator, num_samples, chains,
 def algorithm(logdensity_fn, num_steps, chains, 
               initial_position, rng_key,
               num_steps_per_sample, 
-              mclachlan = True,
-              observables= jnp.square):
+              mclachlan,
+              observables):
     
     d = ravel_pytree(initial_position)[0].shape[0] // chains # number of dimensions
 
     # burn-in with the unadjusted method    def stage1(logdensity_fn, num_steps, chains, initial_position, rng_key, 
-
+    print('start stage 1')
     state_all, info1 = umclmc.stage1(logdensity_fn, num_steps, chains, initial_position, rng_key, observables= observables)
 
     state, adap_state, key = state_all
-    
+    print('finished stage 1')
     # readjust the hyperparameters
     hyp = adap_state.hyperparameters
     adap_state = adap_state._replace(hyperparameters= hyp._replace(L= hyp.step_size * num_steps_per_sample))
     
     integrator, num_samples, steps_per_sample, step_size, Lpartial = init(num_steps, num_steps_per_sample, adap_state, d, mclachlan)
-
+    print('started stage 2')
     # refine the results with the adjusted method
     state_final, info2 = stage2(logdensity_fn, integrator, num_samples, chains, 
                                 state, key, 
                                 steps_per_sample, Lpartial, step_size,
                                 observables= observables)
-    
+    print('finished stage 2')
     return info1, info2
     
     
