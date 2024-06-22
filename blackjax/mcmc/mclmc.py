@@ -24,7 +24,7 @@ from blackjax.mcmc.integrators import IntegratorState, isokinetic_mclachlan, par
 from blackjax.types import ArrayLike, PRNGKey
 from blackjax.util import generate_unit_vector, pytree_size
 
-__all__ = ["MCLMCInfo", "init", "build_kernel", "mclmc"]
+__all__ = ["MCLMCInfo", "init", "build_kernel", "as_top_level_api"]
 
 
 class MCLMCInfo(NamedTuple):
@@ -107,7 +107,12 @@ def build_kernel(logdensity_fn, integrator):
     return kernel
 
 
-class mclmc:
+def as_top_level_api(
+    logdensity_fn: Callable,
+    L,
+    step_size,
+    integrator=isokinetic_mclachlan,
+) -> SamplingAlgorithm:
     """The general mclmc kernel builder (:meth:`blackjax.mcmc.mclmc.build_kernel`, alias `blackjax.mclmc.build_kernel`) can be
     cumbersome to manipulate. Since most users only need to specify the kernel
     parameters at initialization time, we provide a helper function that
@@ -154,25 +159,15 @@ class mclmc:
     A ``SamplingAlgorithm``.
     """
 
-    init = staticmethod(init)
-    build_kernel = staticmethod(build_kernel)
+    kernel = build_kernel(logdensity_fn, integrator)
 
-    def __new__(  # type: ignore[misc]
-        cls,
-        logdensity_fn: Callable,
-        L,
-        step_size,
-        integrator=isokinetic_mclachlan,
-    ) -> SamplingAlgorithm:
-        kernel = cls.build_kernel(logdensity_fn, integrator)
+    def init_fn(position: ArrayLike, rng_key: PRNGKey):
+        return init(position, logdensity_fn, rng_key)
 
-        def init_fn(position: ArrayLike, rng_key: PRNGKey):
-            return cls.init(position, logdensity_fn, rng_key)
+    def update_fn(rng_key, state):
+        return kernel(rng_key, state, L, step_size)
 
-        def update_fn(rng_key, state):
-            return kernel(rng_key, state, L, step_size)
-
-        return SamplingAlgorithm(init_fn, update_fn)
+    return SamplingAlgorithm(init_fn, update_fn)
 
 
 

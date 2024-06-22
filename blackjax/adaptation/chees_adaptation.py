@@ -10,7 +10,7 @@ import optax
 
 import blackjax.mcmc.dynamic_hmc as dynamic_hmc
 import blackjax.optimizers.dual_averaging as dual_averaging
-from blackjax.adaptation.base import AdaptationInfo, AdaptationResults
+from blackjax.adaptation.base import AdaptationResults, return_all_adapt_info
 from blackjax.base import AdaptationAlgorithm
 from blackjax.types import Array, ArrayLikeTree, PRNGKey
 from blackjax.util import pytree_size
@@ -278,6 +278,7 @@ def chees_adaptation(
     jitter_amount: float = 1.0,
     target_acceptance_rate: float = OPTIMAL_TARGET_ACCEPTANCE_RATE,
     decay_rate: float = 0.5,
+    adaptation_info_fn: Callable = return_all_adapt_info,
 ) -> AdaptationAlgorithm:
     """Adapt the step size and trajectory length (number of integration steps / step size)
     parameters of the jittered HMC algorthm.
@@ -337,6 +338,11 @@ def chees_adaptation(
         Float representing how much to favor recent iterations over earlier ones in the optimization
         of step size and trajectory length. A value of 1 gives equal weight to all history. A value
         of 0 gives weight only to the most recent iteration.
+    adaptation_info_fn
+        Function to select the adaptation info returned. See return_all_adapt_info
+        and get_filter_adapt_info_fn in blackjax.adaptation.base.  By default all
+        information is saved - this can result in excessive memory usage if the
+        information is unused.
 
     Returns
     -------
@@ -361,20 +367,18 @@ def chees_adaptation(
         ), "initial `positions` leading dimension must be equal to the `num_chains`"
         num_dim = pytree_size(positions) // num_chains
 
-        key_init, key_step = jax.random.split(rng_key)
+        next_random_arg_fn = lambda i: i + 1
+        init_random_arg = 0
 
         if jitter_generator is not None:
-            jitter_gn = lambda key: jitter_generator(key) * jitter_amount + (
-                1.0 - jitter_amount
-            )
-            next_random_arg_fn = lambda key: jax.random.split(key)[1]
-            init_random_arg = key_init
+            rng_key, carry_key = jax.random.split(rng_key)
+            jitter_gn = lambda i: jitter_generator(
+                jax.random.fold_in(carry_key, i)
+            ) * jitter_amount + (1.0 - jitter_amount)
         else:
             jitter_gn = lambda i: dynamic_hmc.halton_sequence(
                 i, np.ceil(np.log2(num_steps + max_sampling_steps))
             ) * jitter_amount + (1.0 - jitter_amount)
-            next_random_arg_fn = lambda i: i + 1
-            init_random_arg = 0
 
         def integration_steps_fn(random_generator_arg, trajectory_length_adjusted):
             return jnp.asarray(
@@ -413,10 +417,8 @@ def chees_adaptation(
                 info.is_divergent,
             )
 
-            return (new_states, new_adaptation_state), AdaptationInfo(
-                new_states,
-                info,
-                new_adaptation_state,
+            return (new_states, new_adaptation_state), adaptation_info_fn(
+                new_states, info, new_adaptation_state
             )
 
         batch_init = jax.vmap(
@@ -425,7 +427,7 @@ def chees_adaptation(
         init_states = batch_init(positions)
         init_adaptation_state = init(init_random_arg, step_size)
 
-        keys_step = jax.random.split(key_step, num_steps)
+        keys_step = jax.random.split(rng_key, num_steps)
         (last_states, last_adaptation_state), info = jax.lax.scan(
             one_step, (init_states, init_adaptation_state), keys_step
         )

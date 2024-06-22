@@ -26,7 +26,7 @@ __all__ = [
     "EllipSliceInfo",
     "init",
     "build_kernel",
-    "elliptical_slice",
+    "as_top_level_api",
 ]
 
 
@@ -119,7 +119,12 @@ def build_kernel(cov_matrix: Array, mean: Array):
     return kernel
 
 
-class elliptical_slice:
+def as_top_level_api(
+    loglikelihood_fn: Callable,
+    *,
+    mean: Array,
+    cov: Array,
+) -> SamplingAlgorithm:
     """Implements the (basic) user interface for the Elliptical Slice sampling kernel.
 
     Examples
@@ -151,31 +156,20 @@ class elliptical_slice:
     -------
     A ``SamplingAlgorithm``.
     """
+    kernel = build_kernel(cov, mean)
 
-    init = staticmethod(init)
-    build_kernel = staticmethod(build_kernel)
+    def init_fn(position: ArrayLikeTree, rng_key=None):
+        del rng_key
+        return init(position, loglikelihood_fn)
 
-    def __new__(  # type: ignore[misc]
-        cls,
-        loglikelihood_fn: Callable,
-        *,
-        mean: Array,
-        cov: Array,
-    ) -> SamplingAlgorithm:
-        kernel = cls.build_kernel(cov, mean)
+    def step_fn(rng_key: PRNGKey, state):
+        return kernel(
+            rng_key,
+            state,
+            loglikelihood_fn,
+        )
 
-        def init_fn(position: ArrayLikeTree, rng_key=None):
-            del rng_key
-            return cls.init(position, loglikelihood_fn)
-
-        def step_fn(rng_key: PRNGKey, state):
-            return kernel(
-                rng_key,
-                state,
-                loglikelihood_fn,
-            )
-
-        return SamplingAlgorithm(init_fn, step_fn)
+    return SamplingAlgorithm(init_fn, step_fn)
 
 
 def elliptical_proposal(
@@ -208,7 +202,7 @@ def elliptical_proposal(
         rng_key: PRNGKey, state: EllipSliceState
     ) -> tuple[EllipSliceState, EllipSliceInfo]:
         position, logdensity = state
-        key_momentum, key_uniform, key_theta = jax.random.split(rng_key, 3)
+        key_slice, key_momentum, key_uniform, key_theta = jax.random.split(rng_key, 4)
         # step 1: sample momentum
         momentum = momentum_generator(key_momentum, position)
         # step 2: get slice (y)
@@ -235,20 +229,20 @@ def elliptical_proposal(
             likelihood is continuous with respect to the parameter being sampled.
 
             """
-            rng, _, subiter, theta, theta_min, theta_max, *_ = vals
-            rng, thetak = jax.random.split(rng)
+            _, subiter, theta, theta_min, theta_max, *_ = vals
+            thetak = jax.random.fold_in(key_slice, subiter)
             theta = jax.random.uniform(thetak, minval=theta_min, maxval=theta_max)
             p, m = ellipsis(position, momentum, theta, mean)
             logdensity = logdensity_fn(p)
             theta_min = jnp.where(theta < 0, theta, theta_min)
             theta_max = jnp.where(theta > 0, theta, theta_max)
             subiter += 1
-            return rng, logdensity, subiter, theta, theta_min, theta_max, p, m
+            return logdensity, subiter, theta, theta_min, theta_max, p, m
 
-        _, logdensity, subiter, theta, *_, position, momentum = jax.lax.while_loop(
-            lambda vals: vals[1] <= logy,
+        logdensity, subiter, theta, *_, position, momentum = jax.lax.while_loop(
+            lambda vals: vals[0] <= logy,
             slice_fn,
-            (rng_key, logdensity, 1, theta, theta_min, theta_max, p, m),
+            (logdensity, 1, theta, theta_min, theta_max, p, m),
         )
         return (
             EllipSliceState(position, logdensity),

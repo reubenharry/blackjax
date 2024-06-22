@@ -4,6 +4,8 @@
 ![PyPI version](https://img.shields.io/pypi/v/blackjax)
 
 
+![BlackJAX animation: sampling BlackJAX with BlackJAX](./docs/examples/scatter.gif)
+
 ## What is BlackJAX?
 
 BlackJAX is a library of samplers for [JAX](https://github.com/google/jax) that
@@ -79,8 +81,8 @@ state = nuts.init(initial_position)
 
 # Iterate
 rng_key = jax.random.key(0)
-for _ in range(100):
-    rng_key, nuts_key = jax.random.split(rng_key)
+for step in range(100):
+    nuts_key = jax.random.fold_in(rng_key, step)
     state, _ = nuts.step(nuts_key, state)
 ```
 
@@ -136,12 +138,13 @@ Please follow our [short guide](https://github.com/blackjax-devs/blackjax/blob/m
 To cite this repository:
 
 ```
-@software{blackjax2020github,
-  author = {Cabezas, Alberto, Lao, Junpeng, and Louf, R\'emi},
-  title = {{B}lackjax: A sampling library for {JAX}},
-  url = {http://github.com/blackjax-devs/blackjax},
-  version = {<insert current release tag>},
-  year = {2023},
+@misc{cabezas2024blackjax,
+      title={BlackJAX: Composable {B}ayesian inference in {JAX}},
+      author={Alberto Cabezas and Adrien Corenflos and Junpeng Lao and Rémi Louf},
+      year={2024},
+      eprint={2402.10797},
+      archivePrefix={arXiv},
+      primaryClass={cs.MS}
 }
 ```
 In the above bibtex entry, names are in alphabetical order, the version number should be the last tag on the `main` branch.

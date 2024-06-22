@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 
 import blackjax.mcmc as mcmc
-from blackjax.adaptation.base import AdaptationInfo, AdaptationResults
+from blackjax.adaptation.base import AdaptationResults, return_all_adapt_info
 from blackjax.base import AdaptationAlgorithm
 from blackjax.types import Array, ArrayLikeTree, ArrayTree, PRNGKey
 
@@ -93,16 +93,16 @@ def base():
         of the generalized HMC algorithm.
 
         """
-        mean_position = jax.tree_map(lambda p: p.mean(axis=0), positions)
-        sd_position = jax.tree_map(lambda p: p.std(axis=0), positions)
-        normalized_positions = jax.tree_map(
+        mean_position = jax.tree.map(lambda p: p.mean(axis=0), positions)
+        sd_position = jax.tree.map(lambda p: p.std(axis=0), positions)
+        normalized_positions = jax.tree.map(
             lambda p, mu, sd: (p - mu) / sd,
             positions,
             mean_position,
             sd_position,
         )
 
-        batch_grad_scaled = jax.tree_map(
+        batch_grad_scaled = jax.tree.map(
             lambda grad, sd: grad * sd, logdensity_grad, sd_position
         )
 
@@ -165,6 +165,7 @@ def base():
 def meads_adaptation(
     logdensity_fn: Callable,
     num_chains: int,
+    adaptation_info_fn: Callable = return_all_adapt_info,
 ) -> AdaptationAlgorithm:
     """Adapt the parameters of the Generalized HMC algorithm.
 
@@ -194,6 +195,11 @@ def meads_adaptation(
         The log density probability density function from which we wish to sample.
     num_chains
         Number of chains used for cross-chain warm-up training.
+    adaptation_info_fn
+        Function to select the adaptation info returned. See return_all_adapt_info
+        and get_filter_adapt_info_fn in blackjax.adaptation.base.  By default all
+        information is saved - this can result in excessive memory usage if the
+        information is unused.
 
     Returns
     -------
@@ -227,10 +233,8 @@ def meads_adaptation(
             adaptation_state, new_states.position, new_states.logdensity_grad
         )
 
-        return (new_states, new_adaptation_state), AdaptationInfo(
-            new_states,
-            info,
-            new_adaptation_state,
+        return (new_states, new_adaptation_state), adaptation_info_fn(
+            new_states, info, new_adaptation_state
         )
 
     def run(rng_key: PRNGKey, positions: ArrayLikeTree, num_steps: int = 1000):

@@ -202,16 +202,13 @@ def make_L_step_size_adaptation(
         # initial state of the kalman filter
 
         # run the steps
-        state, params, _, (_, average) = jax.lax.scan(
+        kalman_state, *_ = jax.lax.scan(
             step,
-            init=(
-                state,
-                params,
-                (0.0, 0.0, jnp.inf),
-                (0.0, jnp.array([jnp.zeros(dim), jnp.zeros(dim)])),
-            ),
-            xs=(mask, L_step_size_adaptation_keys),
-        )[0]
+            init=(state, params, adap0, kalman_state),
+            xs=(outer_weights, L_step_size_adaptation_keys),
+            length=num_steps1 + num_steps2,
+        )
+        state, params, _, kalman_state_output = kalman_state
 
         L = params.L
         # determine L

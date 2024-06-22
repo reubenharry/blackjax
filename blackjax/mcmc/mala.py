@@ -23,7 +23,7 @@ import blackjax.mcmc.proposal as proposal
 from blackjax.base import SamplingAlgorithm
 from blackjax.types import ArrayLikeTree, ArrayTree, PRNGKey
 
-__all__ = ["MALAState", "MALAInfo", "init", "build_kernel", "mala"]
+__all__ = ["MALAState", "MALAInfo", "init", "build_kernel", "as_top_level_api"]
 
 
 class MALAState(NamedTuple):
@@ -79,15 +79,15 @@ def build_kernel():
     def transition_energy(state, new_state, step_size):
         """Transition energy to go from `state` to `new_state`"""
         theta = jax.tree_util.tree_map(
-            lambda new_x, x, g: new_x - x - step_size * g,
-            new_state.position,
+            lambda x, new_x, g: x - new_x - step_size * g,
             state.position,
-            state.logdensity_grad,
+            new_state.position,
+            new_state.logdensity_grad,
         )
         theta_dot = jax.tree_util.tree_reduce(
             operator.add, jax.tree_util.tree_map(lambda x: jnp.sum(x * x), theta)
         )
-        return -state.logdensity + 0.25 * (1.0 / step_size) * theta_dot
+        return -new_state.logdensity + 0.25 * (1.0 / step_size) * theta_dot
 
     compute_acceptance_ratio = proposal.compute_asymmetric_acceptance_ratio(
         transition_energy
@@ -117,7 +117,10 @@ def build_kernel():
     return kernel
 
 
-class mala:
+def as_top_level_api(
+    logdensity_fn: Callable,
+    step_size: float,
+) -> SamplingAlgorithm:
     """Implements the (basic) user interface for the MALA kernel.
 
     The general mala kernel builder (:meth:`blackjax.mcmc.mala.build_kernel`, alias `blackjax.mala.build_kernel`) can be
@@ -167,21 +170,13 @@ class mala:
 
     """
 
-    init = staticmethod(init)
-    build_kernel = staticmethod(build_kernel)
+    kernel = build_kernel()
 
-    def __new__(  # type: ignore[misc]
-        cls,
-        logdensity_fn: Callable,
-        step_size: float,
-    ) -> SamplingAlgorithm:
-        kernel = cls.build_kernel()
+    def init_fn(position: ArrayLikeTree, rng_key=None):
+        del rng_key
+        return init(position, logdensity_fn)
 
-        def init_fn(position: ArrayLikeTree, rng_key=None):
-            del rng_key
-            return cls.init(position, logdensity_fn)
+    def step_fn(rng_key: PRNGKey, state):
+        return kernel(rng_key, state, logdensity_fn, step_size)
 
-        def step_fn(rng_key: PRNGKey, state):
-            return kernel(rng_key, state, logdensity_fn, step_size)
-
-        return SamplingAlgorithm(init_fn, step_fn)
+    return SamplingAlgorithm(init_fn, step_fn)

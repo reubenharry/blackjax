@@ -27,7 +27,7 @@ __all__ = [
     "sample",
     "generate_meanfield_logdensity",
     "step",
-    "meanfield_vi",
+    "as_top_level_api",
 ]
 
 
@@ -48,8 +48,8 @@ def init(
     **optimizer_kwargs,
 ) -> MFVIState:
     """Initialize the mean-field VI state."""
-    mu = jax.tree_map(jnp.zeros_like, position)
-    rho = jax.tree_map(lambda x: -2.0 * jnp.ones_like(x), position)
+    mu = jax.tree.map(jnp.zeros_like, position)
+    rho = jax.tree.map(lambda x: -2.0 * jnp.ones_like(x), position)
     opt_state = optimizer.init((mu, rho))
     return MFVIState(mu, rho, opt_state)
 
@@ -99,7 +99,7 @@ def step(
 
     elbo, elbo_grad = jax.value_and_grad(kl_divergence_fn)(parameters)
     updates, new_opt_state = optimizer.update(elbo_grad, state.opt_state, parameters)
-    new_parameters = jax.tree_map(lambda p, u: p + u, parameters, updates)
+    new_parameters = jax.tree.map(lambda p, u: p + u, parameters, updates)
     new_state = MFVIState(new_parameters[0], new_parameters[1], new_opt_state)
     return new_state, MFVIInfo(elbo)
 
@@ -109,7 +109,11 @@ def sample(rng_key: PRNGKey, state: MFVIState, num_samples: int = 1):
     return _sample(rng_key, state.mu, state.rho, num_samples)
 
 
-class meanfield_vi:
+def as_top_level_api(
+    logdensity_fn: Callable,
+    optimizer: GradientTransformation,
+    num_samples: int = 100,
+):
     """High-level implementation of Mean-Field Variational Inference.
 
     Parameters
@@ -128,30 +132,20 @@ class meanfield_vi:
 
     """
 
-    init = staticmethod(init)
-    step = staticmethod(step)
-    sample = staticmethod(sample)
+    def init_fn(position: ArrayLikeTree):
+        return init(position, optimizer)
 
-    def __new__(
-        cls,
-        logdensity_fn: Callable,
-        optimizer: GradientTransformation,
-        num_samples: int = 100,
-    ):  # type: ignore[misc]
-        def init_fn(position: ArrayLikeTree):
-            return cls.init(position, optimizer)
+    def step_fn(rng_key: PRNGKey, state: MFVIState) -> tuple[MFVIState, MFVIInfo]:
+        return step(rng_key, state, logdensity_fn, optimizer, num_samples)
 
-        def step_fn(rng_key: PRNGKey, state: MFVIState) -> tuple[MFVIState, MFVIInfo]:
-            return cls.step(rng_key, state, logdensity_fn, optimizer, num_samples)
+    def sample_fn(rng_key: PRNGKey, state: MFVIState, num_samples: int):
+        return sample(rng_key, state, num_samples)
 
-        def sample_fn(rng_key: PRNGKey, state: MFVIState, num_samples: int):
-            return cls.sample(rng_key, state, num_samples)
-
-        return VIAlgorithm(init_fn, step_fn, sample_fn)
+    return VIAlgorithm(init_fn, step_fn, sample_fn)
 
 
 def _sample(rng_key, mu, rho, num_samples):
-    sigma = jax.tree_map(jnp.exp, rho)
+    sigma = jax.tree.map(jnp.exp, rho)
     mu_flatten, unravel_fn = jax.flatten_util.ravel_pytree(mu)
     sigma_flat, _ = jax.flatten_util.ravel_pytree(sigma)
     flatten_sample = (
@@ -162,11 +156,11 @@ def _sample(rng_key, mu, rho, num_samples):
 
 
 def generate_meanfield_logdensity(mu, rho):
-    sigma_param = jax.tree_map(jnp.exp, rho)
+    sigma_param = jax.tree.map(jnp.exp, rho)
 
     def meanfield_logdensity(position):
-        logq_pytree = jax.tree_map(jsp.stats.norm.logpdf, position, mu, sigma_param)
-        logq = jax.tree_map(jnp.sum, logq_pytree)
+        logq_pytree = jax.tree.map(jsp.stats.norm.logpdf, position, mu, sigma_param)
+        logq = jax.tree.map(jnp.sum, logq_pytree)
         return jax.tree_util.tree_reduce(jnp.add, logq)
 
     return meanfield_logdensity

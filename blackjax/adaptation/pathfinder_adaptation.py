@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Implementation of the Pathinder warmup for the HMC family of sampling algorithms."""
-from typing import Callable, NamedTuple, Union
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
 
-import blackjax.mcmc as mcmc
 import blackjax.vi as vi
-from blackjax.adaptation.base import AdaptationInfo, AdaptationResults
+from blackjax.adaptation.base import AdaptationResults, return_all_adapt_info
 from blackjax.adaptation.step_size import (
     DualAveragingAdaptationState,
     dual_averaging_adaptation,
@@ -138,10 +137,11 @@ def base(
 
 
 def pathfinder_adaptation(
-    algorithm: Union[mcmc.hmc.hmc, mcmc.nuts.nuts],
+    algorithm,
     logdensity_fn: Callable,
     initial_step_size: float = 1.0,
     target_acceptance_rate: float = 0.80,
+    adaptation_info_fn: Callable = return_all_adapt_info,
     **extra_parameters,
 ) -> AdaptationAlgorithm:
     """Adapt the value of the inverse mass matrix and step size parameters of
@@ -157,6 +157,11 @@ def pathfinder_adaptation(
         The initial step size used in the algorithm.
     target_acceptance_rate
         The acceptance rate that we target during step size adaptation.
+    adaptation_info_fn
+        Function to select the adaptation info returned. See return_all_adapt_info
+        and get_filter_adapt_info_fn in blackjax.adaptation.base.  By default all
+        information is saved - this can result in excessive memory usage if the
+        information is unused.
     **extra_parameters
         The extra parameters to pass to the algorithm, e.g. the number of
         integration steps for HMC.
@@ -189,7 +194,7 @@ def pathfinder_adaptation(
         )
         return (
             (new_state, new_adaptation_state),
-            AdaptationInfo(new_state, info, new_adaptation_state),
+            adaptation_info_fn(new_state, info, new_adaptation_state),
         )
 
     def run(rng_key: PRNGKey, position: ArrayLikeTree, num_steps: int = 400):

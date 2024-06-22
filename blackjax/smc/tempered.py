@@ -21,7 +21,7 @@ from blackjax.base import SamplingAlgorithm
 from blackjax.smc.base import SMCState
 from blackjax.types import Array, ArrayLikeTree, ArrayTree, PRNGKey
 
-__all__ = ["TemperedSMCState", "init", "build_kernel"]
+__all__ = ["TemperedSMCState", "init", "build_kernel", "as_top_level_api"]
 
 
 class TemperedSMCState(NamedTuple):
@@ -127,12 +127,12 @@ def build_kernel(
             tempered_loglikelihood = state.lmbda * loglikelihood_fn(position)
             return logprior + tempered_loglikelihood
 
-        def mcmc_kernel(rng_key, position):
+        def mcmc_kernel(rng_key, position, step_parameters):
             state = mcmc_init_fn(position, tempered_logposterior_fn)
 
             def body_fn(state, rng_key):
                 new_state, info = mcmc_step_fn(
-                    rng_key, state, tempered_logposterior_fn, **mcmc_parameters
+                    rng_key, state, tempered_logposterior_fn, **step_parameters
                 )
                 return new_state, info
 
@@ -142,7 +142,7 @@ def build_kernel(
 
         smc_state, info = smc.base.step(
             rng_key,
-            SMCState(state.particles, state.weights),
+            SMCState(state.particles, state.weights, mcmc_parameters),
             jax.vmap(mcmc_kernel),
             jax.vmap(log_weights_fn),
             resampling_fn,
@@ -156,7 +156,15 @@ def build_kernel(
     return kernel
 
 
-class tempered_smc:
+def as_top_level_api(
+    logprior_fn: Callable,
+    loglikelihood_fn: Callable,
+    mcmc_step_fn: Callable,
+    mcmc_init_fn: Callable,
+    mcmc_parameters: dict,
+    resampling_fn: Callable,
+    num_mcmc_steps: int = 10,
+) -> SamplingAlgorithm:
     """Implements the (basic) user interface for the Adaptive Tempered SMC kernel.
 
     Parameters
@@ -181,39 +189,25 @@ class tempered_smc:
     A ``SamplingAlgorithm``.
 
     """
+    kernel = build_kernel(
+        logprior_fn,
+        loglikelihood_fn,
+        mcmc_step_fn,
+        mcmc_init_fn,
+        resampling_fn,
+    )
 
-    init = staticmethod(init)
-    build_kernel = staticmethod(build_kernel)
+    def init_fn(position: ArrayLikeTree, rng_key=None):
+        del rng_key
+        return init(position)
 
-    def __new__(  # type: ignore[misc]
-        cls,
-        logprior_fn: Callable,
-        loglikelihood_fn: Callable,
-        mcmc_step_fn: Callable,
-        mcmc_init_fn: Callable,
-        mcmc_parameters: dict,
-        resampling_fn: Callable,
-        num_mcmc_steps: int = 10,
-    ) -> SamplingAlgorithm:
-        kernel = cls.build_kernel(
-            logprior_fn,
-            loglikelihood_fn,
-            mcmc_step_fn,
-            mcmc_init_fn,
-            resampling_fn,
+    def step_fn(rng_key: PRNGKey, state, lmbda):
+        return kernel(
+            rng_key,
+            state,
+            num_mcmc_steps,
+            lmbda,
+            mcmc_parameters,
         )
 
-        def init_fn(position: ArrayLikeTree, rng_key=None):
-            del rng_key
-            return cls.init(position)
-
-        def step_fn(rng_key: PRNGKey, state, lmbda):
-            return kernel(
-                rng_key,
-                state,
-                num_mcmc_steps,
-                lmbda,
-                mcmc_parameters,
-            )
-
-        return SamplingAlgorithm(init_fn, step_fn)  # type: ignore[arg-type]
+    return SamplingAlgorithm(init_fn, step_fn)  # type: ignore[arg-type]
