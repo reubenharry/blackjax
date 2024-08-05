@@ -93,6 +93,7 @@ def init(position: ArrayLikeTree, logdensity_fn: Callable):
 def build_kernel(
     integrator: Callable = integrators.velocity_verlet,
     divergence_threshold: float = 1000,
+    sample_proposal: Callable = static_binomial_sampling,
 ):
     """Build a HMC kernel.
 
@@ -130,6 +131,7 @@ def build_kernel(
             step_size,
             num_integration_steps,
             divergence_threshold,
+            sample_proposal
         )
 
         key_momentum, key_integrator = jax.random.split(rng_key, 2)
@@ -158,6 +160,7 @@ def as_top_level_api(
     *,
     divergence_threshold: int = 1000,
     integrator: Callable = integrators.velocity_verlet,
+    sample_proposal: Callable = static_binomial_sampling,
 ) -> SamplingAlgorithm:
     """Implements the (basic) user interface for the HMC kernel.
 
@@ -233,7 +236,7 @@ def as_top_level_api(
     A ``SamplingAlgorithm``.
     """
 
-    kernel = build_kernel(integrator, divergence_threshold)
+    kernel = build_kernel(integrator, divergence_threshold, sample_proposal)
 
     def init_fn(position: ArrayLikeTree, rng_key=None):
         del rng_key
