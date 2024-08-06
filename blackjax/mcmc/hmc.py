@@ -104,6 +104,10 @@ def build_kernel(
     divergence_threshold
         Value of the difference in energy above which we consider that the transition is
         divergent.
+    sample_proposal
+        A function that accepts/rejects a proposal. Can be set to 
+        blackjax.mcmc.proposal.always_accept 
+        if we want to do unadjusted HMC.
 
     Returns
     -------
@@ -230,6 +234,10 @@ def as_top_level_api(
     integrator
         (algorithm parameter) The symplectic integrator to use to integrate the
         trajectory.
+    sample_proposal
+        A function that accepts/rejects a proposal. Can be set to 
+        blackjax.mcmc.proposal.always_accept 
+        if we want to do unadjusted HMC.
 
     Returns
     -------
