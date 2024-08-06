@@ -19,6 +19,7 @@ import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 from jax.random import normal
 
+
 from blackjax.mcmc.metrics import KineticEnergy
 from blackjax.types import ArrayTree
 
@@ -26,6 +27,9 @@ __all__ = [
     "mclachlan",
     "omelyan",
     "velocity_verlet",
+    "velocity_verlet_coefficients"
+    "mclachlan_coefficients"
+    "yoshida_coefficients"
     "yoshida",
     "with_isokinetic_maruyama",
     "isokinetic_velocity_verlet",

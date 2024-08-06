@@ -238,6 +238,13 @@ def static_binomial_sampling(
     )
 
 
+
+def always_accept(rng_key: PRNGKey, log_p_accept: float, proposal, new_proposal):
+    """Always accept the new proposal. Used if we do not want to do the Metropolis-Hastings test."""
+    info = True, 1., None
+    return new_proposal, info
+
+
 # --------------------------------------------------------------------
 #                   NON-REVERSIVLE SLICE SAMPLING
 # --------------------------------------------------------------------
