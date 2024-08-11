@@ -242,7 +242,7 @@ def thinning(sampling_algorithm, num_thinning):
                                        init= state, 
                                        xs= jax.random.split(rng_key, num_thinning))
         
-        return new_state, info[-1] # return only the last state and the associated info
+        return new_state, jax.tree.map(lambda x: x[-1], info) # return only the last state and the associated info
     
     return SamplingAlgorithm(sampling_algorithm.init, update_fn)
 
