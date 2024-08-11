@@ -232,6 +232,23 @@ def run_inference_algorithm(
         return transform(final_state), state_history, info_history
 
 
+def thinning(sampling_algorithm, num_thinning):
+    """Transform the sampling algorithm, such that only one every num_thinning samples is saved (to save memory). Returns a new sampling algorithm."""
+    
+    def update_fn(rng_key, state):
+        
+        # do 'num_thinning' number of steps
+        new_state, info = jax.lax.scan(lambda state, key: sampling_algorithm.step(key, state), 
+                                       init= state, 
+                                       xs= jax.random.split(rng_key, num_thinning))
+        
+        return new_state, info[-1] # return only the last state and the associated info
+    
+    return SamplingAlgorithm(sampling_algorithm.init, update_fn)
+
+
+
+
 def streaming_average(expectation, streaming_avg, weight=1.0, zero_prevention=0.0):
     """Compute the streaming average of a function O(x) using a weight.
     Parameters:
