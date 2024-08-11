@@ -21,12 +21,7 @@ from jax.flatten_util import ravel_pytree
 from blackjax.adaptation.step_size import DualAveragingAdaptationState, dual_averaging_adaptation
 
 from blackjax.diagnostics import effective_sample_size
-<<<<<<< HEAD
 from blackjax.util import pytree_size, streaming_average_update
-=======
-from blackjax.mcmc.mhmclmc import rescale
-from blackjax.util import pytree_size
->>>>>>> uhmc
 
 
 class MCLMCAdaptationState(NamedTuple):
@@ -94,7 +89,6 @@ def mclmc_find_L_and_step_size(
     Returns
     -------
     A tuple containing the final state of the MCMC algorithm and the final hyperparameters.
-<<<<<<< HEAD
 
     Example
     -------
@@ -115,8 +109,6 @@ def mclmc_find_L_and_step_size(
             rng_key=tune_key,
             diagonal_preconditioning=preconditioning,
         )
-=======
->>>>>>> uhmc
     """
     dim = pytree_size(state.position)
     params = MCLMCAdaptationState(
@@ -202,10 +194,6 @@ def make_L_step_size_adaptation(
         adaptive_state = (time, x_average, step_size_max)
 
         return state, params_new, adaptive_state, success
-<<<<<<< HEAD
-=======
-
->>>>>>> uhmc
 
     def step(iteration_state, weight_and_key):
         """does one step of the dynamics and updates the estimate of the posterior size and optimal stepsize"""
@@ -217,26 +205,16 @@ def make_L_step_size_adaptation(
             state, params, adaptive_state, rng_key
         )
 
-<<<<<<< HEAD
         x = ravel_pytree(state.position)[0]
         # update the running average of x, x^2
         streaming_avg = streaming_average_update(
             current_value=jnp.array([x, jnp.square(x)]),
             previous_weight_and_average=streaming_avg,
             weight=(1 - mask) * success * params.step_size,
-=======
-        # update the running average of x, x^2
-        streaming_avg = streaming_average(
-            O=lambda x: jnp.array([x, jnp.square(x)]),
-            x=ravel_pytree(state.position)[0],
-            streaming_avg=streaming_avg,
-            weight=(1-mask)*success*params.step_size,
->>>>>>> uhmc
             zero_prevention=mask,
         )
 
         return (state, params, adaptive_state, streaming_avg), None
-<<<<<<< HEAD
 
     run_steps = lambda xs, state, params: jax.lax.scan(
         step,
@@ -248,8 +226,6 @@ def make_L_step_size_adaptation(
         ),
         xs=xs,
     )[0]
-=======
->>>>>>> uhmc
 
     def L_step_size_adaptation(state, params, num_steps, rng_key):
         num_steps1, num_steps2 = (
@@ -265,13 +241,7 @@ def make_L_step_size_adaptation(
         )
 
         # we use the last num_steps2 to compute the diagonal preconditioner
-<<<<<<< HEAD
         mask = 1 - jnp.concatenate((jnp.zeros(num_steps1), jnp.ones(num_steps2)))
-=======
-        mask = 1-jnp.concatenate((jnp.zeros(num_steps1), jnp.ones(num_steps2)))
-
-        # initial state of the kalman filter
->>>>>>> uhmc
 
         # run the steps
         state, params, _, (_, average) = run_steps(

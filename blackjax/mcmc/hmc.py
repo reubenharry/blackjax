@@ -135,7 +135,7 @@ def build_kernel(
             step_size,
             num_integration_steps,
             divergence_threshold,
-            sample_proposal
+            sample_proposal= sample_proposal
         )
 
         key_momentum, key_integrator = jax.random.split(rng_key, 2)

@@ -16,6 +16,7 @@ from .mcmc import dynamic_hmc as _dynamic_hmc
 from .mcmc import elliptical_slice as _elliptical_slice
 from .mcmc import ghmc as _ghmc
 from .mcmc import hmc as _hmc
+from .mcmc import uhmc as _uhmc
 from .mcmc import mala as _mala
 from .mcmc import marginal_latent_gaussian
 from .mcmc import mclmc as _mclmc
@@ -91,6 +92,7 @@ def generate_top_level_api_from(module):
 
 # MCMC
 hmc = generate_top_level_api_from(_hmc)
+uhmc = generate_top_level_api_from(_uhmc)
 nuts = generate_top_level_api_from(_nuts)
 rmh = GenerateSamplingAPI(rmh_as_top_level_api, random_walk.init, random_walk.build_rmh)
 irmh = GenerateSamplingAPI(

@@ -282,59 +282,39 @@ def run_inference_algorithm(
     return final_state, history
 
 
-def store_only_expectation_values(sampling_algorithm, state_transform= lambda x: x, exp_vals_transform= lambda x: x):
+def store_only_expectation_values(sampling_algorithm, state_transform= lambda x: x, exp_vals_transform= lambda x: x, burn_in= 0):
     """Takes a sampling algorithm and constructs from it a new sampling algorithm object. The new sampling algorithm has the same 
         kernel but only stores the streaming expectation values of some observables, not the full states; to save memory.
 
        It saves exp_vals_transform(E[state_transform(x)]) at each step i, where expectation is computed with samples up to i-th sample.
        
-       Example:
-
-       .. code::
-
-            init_key, state_key, run_key = jax.random.split(jax.random.PRNGKey(0),3)
-            model = StandardNormal(2)
-            initial_position = model.sample_init(init_key)
-            initial_state = blackjax.mcmc.mclmc.init(
-                position=initial_position, logdensity_fn=model.logdensity_fn, rng_key=state_key
-            )
-            integrator_type = "mclachlan"
-            L = 1.0
-            step_size = 0.1
-            num_steps = 4
-
-            integrator = map_integrator_type_to_integrator['mclmc'][integrator_type]
-            state_transform = lambda state: x.position
-            memory_efficient_sampling_alg, transform = store_only_expectation_values(
-                sampling_algorithm=sampling_alg,
-                state_transform=state_transform)
-            
-            initial_state = memory_efficient_sampling_alg.init(initial_state)
-                
-            final_state, trace_at_every_step = run_inference_algorithm(
-
-                rng_key=run_key,
-                initial_state=initial_state,
-                inference_algorithm=memory_efficient_sampling_alg,
-                num_steps=num_steps,
-                transform=transform,
-                progress_bar=True,
-            )           
+       burn_in: number of burn-in steps to discard in expectation values
+       
     """
     
     def init_fn(state):
-        averaging_state = (0., state_transform(state))
+        averaging_state = (1, 0., state_transform(state))
         return (state, averaging_state)
+
 
     def update_fn(rng_key, state_full):
         state, averaging_state = state_full
-        state, info = sampling_algorithm.step(rng_key, state) # update the state with the sampling algorithm
-        averaging_state = streaming_average_update(state_transform(state), averaging_state) # update the expectation value with the Kalman filter
+        
+        # update the state with the sampling algorithm
+        state, info = sampling_algorithm.step(rng_key, state) 
+        
+        # update the expectation value with the Kalman filter
+        averaging_state = streaming_average_update(state_transform(state), 
+                                                   averaging_state, 
+                                                   weight= (averaging_state[0] > burn_in), # If we want to eliminate some number of steps as a burn-in
+                                                   zero_prevention= 1e-10 * (burn_in > 0)) # If we do burn-in, initial states will have zero weight. We add some small number to the weight in the denominator to prevent division by zero.
         return (state, averaging_state), info
     
+    
     def transform(full_state, info):
-        exp_vals = full_state[1][1]
+        exp_vals = full_state[1][-1]
         return exp_vals_transform(exp_vals), info
+
 
     return SamplingAlgorithm(init_fn, update_fn), transform
     
@@ -358,11 +338,9 @@ def streaming_average_update(expectation, streaming_avg, weight=1.0, zero_preven
     """
 
     flat_expectation, unravel_fn = ravel_pytree(expectation)
-    total, average = streaming_avg
+    count, total, average = streaming_avg
     flat_average, _ = ravel_pytree(average)
-    average = (total * flat_average + weight * flat_expectation) / (
-        total + weight + zero_prevention
-    )
+    average = (total * flat_average + weight * flat_expectation) / (total + weight + zero_prevention)
     total += weight
-    streaming_avg = (total, unravel_fn(average))
+    streaming_avg = (count+1, total, unravel_fn(average))
     return streaming_avg

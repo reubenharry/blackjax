@@ -17,15 +17,11 @@ from typing import Callable, NamedTuple
 import jax
 
 from blackjax.base import SamplingAlgorithm
-<<<<<<< HEAD
 from blackjax.mcmc.integrators import (
     IntegratorState,
     isokinetic_mclachlan,
     with_isokinetic_maruyama,
 )
-=======
-from blackjax.mcmc.integrators import IntegratorState, isokinetic_mclachlan, partially_refresh_momentum, with_isokinetic_maruyama
->>>>>>> uhmc
 from blackjax.types import ArrayLike, PRNGKey
 from blackjax.util import generate_unit_vector, pytree_size
 
@@ -83,15 +79,10 @@ def build_kernel(logdensity_fn, sqrt_diag_cov, integrator):
     information about the transition.
 
     """
-<<<<<<< HEAD
 
     step = with_isokinetic_maruyama(
         integrator(logdensity_fn=logdensity_fn, sqrt_diag_cov=sqrt_diag_cov)
     )
-=======
-    # step = integrator(logdensity_fn)
-    step = with_isokinetic_maruyama(integrator(logdensity_fn))
->>>>>>> uhmc
 
     def kernel(
         rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float
@@ -99,17 +90,6 @@ def build_kernel(logdensity_fn, sqrt_diag_cov, integrator):
         (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
             state, step_size, L, rng_key
         )
-<<<<<<< HEAD
-=======
-
-        # (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
-        #     state, step_size,
-        # )
-        # Langevin-like noise
-        # momentum = partially_refresh_momentum(
-        #     momentum=momentum, rng_key=rng_key, L=L, step_size=step_size
-        # )
->>>>>>> uhmc
 
         return IntegratorState(
             position, momentum, logdensity, logdensitygrad
@@ -184,9 +164,3 @@ def as_top_level_api(
         return kernel(rng_key, state, L, step_size)
 
     return SamplingAlgorithm(init_fn, update_fn)
-<<<<<<< HEAD
-=======
-
-
-
->>>>>>> uhmc
