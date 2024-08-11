@@ -192,11 +192,11 @@ def nan_reject(nonans, old, new):
 
 
 
-def build_kernel1(sequential_mclmc_kerel, max_iter, parallelization, fullrank, d, alpha = 1., C = 0.1):
+def build_kernel1(sequential_mclmc_kerel, max_iter, parallelization, fullrank_equipartition, d, alpha = 1., C = 0.1):
 
     mclmc_kernel = parallelization.pvmap(sequential_mclmc_kerel, (0, 0, None, None))
     
-    equi = equipartition_fullrank if fullrank else equipartition_diagonal
+    equi = equipartition_fullrank if fullrank_equipartition else equipartition_diagonal
     
     
     def kernel(state_all):
@@ -266,11 +266,11 @@ def kernel_with_observables(kernel, observables, parallelization):
 
 
 
-def stage1(logdensity_fn, num_steps, parallelization, initial_position, rng_key, 
+def stage1(logdensity_fn, num_steps, parallelization, initial_position, rng_key, observables,
             delay_frac = 0.05,
             C = 0.1,
             alpha = 1.,
-            fullrank = False):
+            fullrank_equipartition = False):
     """observable: function taking position x and outputing O(x)."""
     
 
@@ -281,7 +281,7 @@ def stage1(logdensity_fn, num_steps, parallelization, initial_position, rng_key,
     
     max_iter = 500#num_steps // 4
     
-    kernel = build_kernel1(sequential_kernel, max_iter, parallelization, fullrank, d, alpha, C)
+    kernel = build_kernel1(sequential_kernel, max_iter, parallelization, fullrank_equipartition, d, alpha, C)
 
     # initialize 
     state = init(position=initial_position, logdensity_fn=logdensity_fn, parallelization= parallelization)
