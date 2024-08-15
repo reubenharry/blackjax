@@ -24,6 +24,9 @@ import blackjax.adaptation.ensemble_umclmc as umclmc
 
 from blackjax.adaptation.step_size import dual_averaging_adaptation
 
+from jax.sharding import PartitionSpec
+from jax.experimental.shard_map import shard_map
+p = PartitionSpec('chains')
 
 
 class AdaptationState(NamedTuple):
@@ -70,67 +73,76 @@ def init(num_steps, steps_per_sample, adap_state, d, mclachlan):
     #steps_left = (num_steps - adap_state.steps) // grads_per_step
     #steps_per_sample = (int)(jnp.max(jnp.array([Lfull / step_size, 1])))
     num_samples = (num_steps - adap_state.steps) // (grads_per_step * steps_per_sample)
-    
+    print(num_samples)
     return integrator, num_samples, steps_per_sample, step_size, Lpartial
 
 
 
-def stage2(logdensity_fn, integrator, num_samples, parallelization, 
+def stage2(logdensity_fn, integrator, num_samples, 
            init_state, rng_key, 
            steps_per_sample, Lpartial, step_size,
+           mesh,
            acc_prob_target= 0.7,
            observables= jnp.square):
     """observables: function taking position x and outputing O(x), can be vector valued."""
     
+    chains, d = init_state.position.shape
     
     da_init, da_update, da_final = dual_averaging_adaptation(target= acc_prob_target)
     da_state = da_init(step_size)
     adap = AdaptationState(steps_per_sample, Lpartial, step_size, da_state)
     
+    sequential_kernel = mhmclmc.mhmclmc_proposal(with_isokinetic_maruyama(integrator(logdensity_fn)),
+                                                     adap.step_size, adap.Lpartial, steps_per_sample)
+
+    kernel = shard_map(jax.vmap(sequential_kernel), 
+                        mesh=mesh, 
+                        in_specs=(p, p), 
+                        out_specs=(p, p, p))
+            
     def step(state_all, key):
         state, adap = state_all
         key1, key2 = jax.random.split(key)
 
         # dynamics
-        sequential_kernel = mhmclmc.mhmclmc_proposal(with_isokinetic_maruyama(integrator(logdensity_fn)),
-                                                     adap.step_size, adap.Lpartial, steps_per_sample)
-        kernel = parallelization.pvmap(sequential_kernel, (0, 0))
-        keys1 = jax.random.split(key1, parallelization.num_chains).reshape(parallelization.shape)
+        
+        keys1 = jax.random.split(key1, chains)
         state, info, _ = kernel(keys1, state)
 
         # change the stepsize
-        acc_prob = jnp.average(info.acceptance_rate)
-        da_state = da_update(adap.da_state, acc_prob)
-        step_size = jnp.exp(da_state.log_step_size)
-    
+        # acc_prob = jnp.average(info.acceptance_rate)
+        # da_state = da_update(adap.da_state, acc_prob)
+        # step_size = jnp.exp(da_state.log_step_size)
+        #step_size = adap.step_size
         # additional information
         
-        equi_full = umclmc.equipartition_fullrank(state.position, state.logdensity_grad, key2, parallelization)
-        equi_diag = umclmc.equipartition_diagonal(state.position, state.logdensity_grad, key2, parallelization)
-        new_info = jnp.concatenate((jnp.array([steps_per_sample, step_size, acc_prob, equi_full, equi_diag]), 
-                                    observables(state.position)))
+        # equi_full = umclmc.equipartition_fullrank(state.position, state.logdensity_grad, key2, parallelization)
+        # equi_diag = umclmc.equipartition_diagonal(state.position, state.logdensity_grad, key2, parallelization)
+        # new_info = jnp.concatenate((jnp.array([steps_per_sample, step_size, acc_prob, equi_full, equi_diag]), 
+        #                             observables(state.position)))
         
-        return (state, AdaptationState(steps_per_sample, Lpartial, step_size, da_state)), new_info
-   
-    keys = jax.random.split(rng_key, num_samples)
-    final_state, info = jax.lax.scan(step, init= (init_state, adap), xs = keys)
-
-    #step_size = da_final(da_state)
+        return (state, adap), None#AdaptationState(steps_per_sample, Lpartial, step_size, da_state)), None# new_info
     
+    final_state, info = jax.lax.scan(step, 
+                                     init= (init_state, adap), 
+                                     xs = jax.random.split(rng_key, num_samples)
+                                     )
     return final_state, to_dict(info)
     
     
 
-def algorithm(logdensity_fn, num_steps, parallelization, 
+def algorithm(logdensity_fn, num_steps, 
               initial_position, rng_key,
               num_steps_per_sample, 
+              mesh = jax.sharding.Mesh(jax.devices(), 'chains'),
               mclachlan = True,
-              observables= jnp.square):
+              observables= jnp.square,
+              ):
     
-    d = ravel_pytree(initial_position)[0].shape[0] // parallelization.num_chains # number of dimensions
+    chains, d = initial_position.shape # fix this later to allow for more complicated parallelizations and parameter pytree structure
 
     # burn-in with the unadjusted method
-    state_all, info1 = umclmc.stage1(logdensity_fn, num_steps, parallelization, initial_position, rng_key, observables= observables)
+    state_all, info1 = umclmc.stage1(logdensity_fn, num_steps, initial_position, rng_key, observables= observables, mesh= mesh)
 
     state, adap_state, key = state_all
     
@@ -141,10 +153,11 @@ def algorithm(logdensity_fn, num_steps, parallelization,
     integrator, num_samples, steps_per_sample, step_size, Lpartial = init(num_steps, num_steps_per_sample, adap_state, d, mclachlan)
 
     ## refine the results with the adjusted method
-    state_final, info2 = stage2(logdensity_fn, integrator, num_samples, parallelization, 
+    state_final, info2 = stage2(logdensity_fn, integrator, num_samples, 
                                 state, key, 
                                 steps_per_sample, Lpartial, step_size,
-                                observables= observables)
+                                observables= observables,
+                                mesh= mesh)
     
     return info1, info2
     
