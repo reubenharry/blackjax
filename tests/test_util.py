@@ -4,12 +4,11 @@ import jax.numpy as jnp
 from absl.testing import absltest, parameterized
 
 import blackjax
-
-
 from blackjax.util import (
     run_inference_algorithm,
     store_only_expectation_values,
-    thinning_kernel)
+    thinning_kernel,
+)
 
 
 class RunInferenceAlgorithmTest(chex.TestCase):
