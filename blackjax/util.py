@@ -324,4 +324,8 @@ def incremental_value_update(
     average = tree_map(
         lambda exp, av: (total * av + weight * exp)
         / (total + weight + zero_prevention),
-   
+        expectation,
+        average,
+    )
+    total += weight
+    return total, average
