@@ -81,9 +81,8 @@ def build_kernel(logdensity_fn, integrator):
     # step = integrator(logdensity_fn)
     step = with_isokinetic_maruyama(integrator(logdensity_fn))
 
-    def kernel(
-        rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float
-    ) -> tuple[IntegratorState, MCLMCInfo]:
+    def kernel(rng_key, state, L, step_size):
+        
         (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
             state, step_size, L, rng_key
         )

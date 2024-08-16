@@ -17,8 +17,7 @@ from typing import Callable, NamedTuple, Any
 
 import jax
 import jax.numpy as jnp
-from jax.flatten_util import ravel_pytree
-from blackjax.mcmc.integrators import IntegratorState, isokinetic_mclachlan, isokinetic_leapfrog, _normalized_flatten_array, with_isokinetic_maruyama
+from blackjax.mcmc.integrators import isokinetic_mclachlan, isokinetic_leapfrog, with_isokinetic_maruyama
 from blackjax.mcmc import mhmclmc
 import blackjax.adaptation.ensemble_umclmc as umclmc
 
@@ -116,8 +115,8 @@ def stage2(logdensity_fn, integrator, num_samples,
         #step_size = adap.step_size
         # additional information
         
-        # equi_full = umclmc.equipartition_fullrank(state.position, state.logdensity_grad, key2, parallelization)
-        # equi_diag = umclmc.equipartition_diagonal(state.position, state.logdensity_grad, key2, parallelization)
+        # equi_full = umclmc.equipartition_fullrank(state.position, state.logdensity_grad, key2, mesh)
+        # equi_diag = umclmc.equipartition_diagonal(state.position, state.logdensity_grad, key2, mesh)
         # new_info = jnp.concatenate((jnp.array([steps_per_sample, step_size, acc_prob, equi_full, equi_diag]), 
         #                             observables(state.position)))
         
@@ -140,25 +139,25 @@ def algorithm(logdensity_fn, num_steps,
               ):
     
     chains, d = initial_position.shape # fix this later to allow for more complicated parallelizations and parameter pytree structure
-
+    print('here')
     # burn-in with the unadjusted method
     state_all, info1 = umclmc.stage1(logdensity_fn, num_steps, initial_position, rng_key, observables= observables, mesh= mesh)
 
     state, adap_state, key = state_all
-    
+    print('here')
     ## readjust the hyperparameters
     hyp = adap_state.hyperparameters
     adap_state = adap_state._replace(hyperparameters= hyp._replace(L= hyp.step_size * num_steps_per_sample))
     
     integrator, num_samples, steps_per_sample, step_size, Lpartial = init(num_steps, num_steps_per_sample, adap_state, d, mclachlan)
-
+    print('here')
     ## refine the results with the adjusted method
     state_final, info2 = stage2(logdensity_fn, integrator, num_samples, 
                                 state, key, 
                                 steps_per_sample, Lpartial, step_size,
                                 observables= observables,
                                 mesh= mesh)
-    
+    print('finito')
     return info1, info2
     
     
