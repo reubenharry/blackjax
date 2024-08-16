@@ -4,7 +4,11 @@ import jax.numpy as jnp
 from absl.testing import absltest, parameterized
 
 import blackjax
-from blackjax.util import run_inference_algorithm, store_only_expectation_values
+from blackjax.util import (
+    run_inference_algorithm,
+    store_only_expectation_values,
+    thinning_kernel,
+)
 
 
 class RunInferenceAlgorithmTest(chex.TestCase):
@@ -84,6 +88,43 @@ class RunInferenceAlgorithmTest(chex.TestCase):
         )
 
         assert jnp.allclose(trace_at_every_step[0][-1], samples.mean(axis=0))
+
+    def test_thinning(self):
+        def logdensity_fn(x):
+            return -0.5 * jnp.sum(jnp.square(x))
+
+        initial_position = jnp.ones(
+            10,
+        )
+
+        state_key, run_key = jax.random.split(self.key, 2)
+        initial_state = blackjax.mcmc.mclmc.init(
+            position=initial_position, logdensity_fn=logdensity_fn, rng_key=state_key
+        )
+        L = 1.0
+        step_size = 0.1
+        num_steps = 1000
+
+        sampling_alg = blackjax.mclmc(
+            logdensity_fn,
+            L=L,
+            step_size=step_size,
+        )
+
+        sampling_alg = thinning_kernel(sampling_alg, thinning_factor=10)
+
+        state_transform = lambda x: x.position
+
+        _, samples = run_inference_algorithm(
+            rng_key=run_key,
+            initial_state=initial_state,
+            inference_algorithm=sampling_alg,
+            num_steps=num_steps,
+            transform=lambda state, info: (state_transform(state)),
+            progress_bar=True,
+        )
+
+        print(jnp.var(samples, axis=0))
 
     @parameterized.parameters([True, False])
     def test_compatible_with_initial_pos(self, progress_bar):

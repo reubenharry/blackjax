@@ -3,6 +3,7 @@
 from functools import partial
 from typing import Callable, Union
 
+import jax
 import jax.numpy as jnp
 from jax import jit, lax
 from jax.flatten_util import ravel_pytree
@@ -209,6 +210,25 @@ def run_inference_algorithm(
     return final_state, history
 
 
+def thinning_kernel(
+    sampling_algorithm,
+    thinning_factor=1,
+):
+    "Takes a sampling algorithm and constructions form it a new sampling algorithm that runs the original sampling algorithm for thinning_factor steps"
+
+    def update_fn(rng_key, state):
+        keys = jax.random.split(rng_key, thinning_factor)
+        state, info = jax.lax.scan(
+            lambda state, key: sampling_algorithm.step(key, state),
+            state,
+            jnp.array(keys),
+        )
+
+        return state, jax.tree_util.tree_map(lambda x: x[-1], info)
+
+    return SamplingAlgorithm(sampling_algorithm.init, update_fn)
+
+
 def store_only_expectation_values(
     sampling_algorithm,
     state_transform=lambda x: x,
@@ -304,8 +324,4 @@ def incremental_value_update(
     average = tree_map(
         lambda exp, av: (total * av + weight * exp)
         / (total + weight + zero_prevention),
-        expectation,
-        average,
-    )
-    total += weight
-    return total, average
+   
