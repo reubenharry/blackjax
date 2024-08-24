@@ -82,6 +82,7 @@ def adjusted_mclmc_find_L_and_step_size(
     )(
         state, params, num_steps, part1_key
     )
+    # jax.debug.print("params after stage 2 {x}", x=params)
 
     if frac_tune3 != 0:
         part2_key1, part2_key2 = jax.random.split(part2_key, 2)
@@ -90,6 +91,7 @@ def adjusted_mclmc_find_L_and_step_size(
             mclmc_kernel, frac=frac_tune3, Lfactor=0.4
         )(state, params, num_steps, part2_key1)
 
+        # jax.debug.print("params after stage 3 {x}", x=params)
         (
             state,
             params,
@@ -106,6 +108,10 @@ def adjusted_mclmc_find_L_and_step_size(
         )(
             state, params, num_steps, part2_key2
         )
+
+       
+        # jax.debug.print("params after stage 1 (again) {x}", x=params)
+        
 
     return state, params, params_history, final_da_val
 
@@ -307,8 +313,11 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor):
         )
 
         flat_samples = jax.vmap(lambda x: ravel_pytree(x)[0])(samples)
-        ess = effective_sample_size(flat_samples[None, ...])
+        # number of effective samples per 1 actual sample
+        ess = jnp.mean(effective_sample_size(flat_samples[None, ...]))/num_steps
 
-        return state, params._replace(L=Lfactor * params.L * jnp.mean(num_steps / ess))
+        # jax.debug.print("{x}foo", x=jnp.mean(ess)/num_steps)
+
+        return state, params._replace(L=Lfactor * params.L / jnp.mean(ess))
 
     return adaptation_L
