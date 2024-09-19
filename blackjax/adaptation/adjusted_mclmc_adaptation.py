@@ -151,6 +151,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
             mask, rng_key = weight_and_key
             # kernel_key, num_steps_key = jax.random.split(rng_key, 2)
+            rng_key, nan_key = jax.random.split(rng_key, 2)
             (
                 previous_state,
                 params,
@@ -181,6 +182,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                 params.step_size,
                 step_size_max,
                 info.energy,
+                nan_key
             )
 
             log_step_size, log_step_size_avg, step, avg_error, mu = update_da(
@@ -486,3 +488,21 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor):
         return state, params._replace(L=Lfactor * params.L / jnp.mean(ess))
 
     return adaptation_L
+
+
+def handle_nans(
+    previous_state, next_state, step_size, step_size_max, kinetic_change, key
+):
+    """if there are nans, let's reduce the stepsize, and not update the state. The
+    function returns the old state in this case."""
+
+    reduced_step_size = 0.8
+    p, unravel_fn = ravel_pytree(next_state.position)
+    nonans = jnp.all(jnp.isfinite(p))
+    state, step_size, kinetic_change = jax.tree_util.tree_map(
+        lambda new, old: jax.lax.select(nonans, jnp.nan_to_num(new), old),
+        (next_state, step_size_max, kinetic_change),
+        (previous_state, step_size * reduced_step_size, 0.0),
+    )
+    
+    return nonans, state, step_size, kinetic_change
