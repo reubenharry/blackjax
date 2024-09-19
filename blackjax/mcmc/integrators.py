@@ -337,6 +337,7 @@ def esh_dynamics_momentum_update_one_step(sqrt_diag_cov=1.0):
         momentum_proj = jnp.dot(flatten_momentum, normalized_gradient)
         delta = step_size * coef * gradient_norm / (dims - 1)
         zeta = jnp.exp(-delta)
+        
         new_momentum_raw = (
             normalized_gradient * (1 - zeta) * (1 + zeta + momentum_proj * (1 - zeta))
             + 2 * zeta * flatten_momentum

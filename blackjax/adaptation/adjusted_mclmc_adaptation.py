@@ -2,13 +2,29 @@ import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
+import optax
+import blackjax
 from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState, handle_nans
 from blackjax.adaptation.step_size import (
     DualAveragingAdaptationState,
     dual_averaging_adaptation,
 )
 from blackjax.diagnostics import effective_sample_size
-from blackjax.util import pytree_size, incremental_value_update
+from blackjax.mcmc.adjusted_mclmc import rescale
+from blackjax.util import pytree_size, incremental_value_update, run_inference_algorithm
+
+from blackjax.mcmc.integrators import (
+    generate_euclidean_integrator,
+    generate_isokinetic_integrator,
+    mclachlan,
+    yoshida,
+    velocity_verlet,
+    omelyan,
+    isokinetic_mclachlan,
+    isokinetic_velocity_verlet,
+    isokinetic_yoshida,
+    isokinetic_omelyan,
+)
 
 Lratio_lowerbound = 0.0
 Lratio_upperbound = 2.0
@@ -131,8 +147,10 @@ def adjusted_mclmc_make_L_step_size_adaptation(
         """does one step of the dynamics and updates the estimate of the posterior size and optimal stepsize"""
 
         def step(iteration_state, weight_and_key):
+
+
             mask, rng_key = weight_and_key
-            kernel_key, num_steps_key = jax.random.split(rng_key, 2)
+            # kernel_key, num_steps_key = jax.random.split(rng_key, 2)
             (
                 previous_state,
                 params,
@@ -143,12 +161,18 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             avg_num_integration_steps = params.L / params.step_size
 
             state, info = kernel(
-                rng_key=kernel_key,
+                rng_key=rng_key,
                 state=previous_state,
                 avg_num_integration_steps=avg_num_integration_steps,
                 step_size=params.step_size,
                 sqrt_diag_cov=params.sqrt_diag_cov,
             )
+            # jax.debug.print("{x}", x=(params.step_size))
+            # jax.debug.print(" acc rate {x}", x=(info.acceptance_rate))
+
+            # jax.debug.print("acceptance rate {x}", x=info.acceptance_rate)
+            # jax.debug.print("{x}", x=params.step_size)
+            # jax.debug.print("L {x}", x=params.L)
 
             # step updating
             success, state, step_size_max, energy_change = handle_nans(
@@ -222,11 +246,84 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             ),
             xs=(mask, keys),
         )
+    
+    def adam_step(loss_fn, optimizer, opt_state, previous_state, params, fix_L, rng_key):
+        # use optax to vary stepsize, to minimize the difference between the acceptance rate and the target acceptance rate
+
+
+        loss_fn(step_size=params.step_size, state=previous_state, key=rng_key)
+        
+        grads = jax.grad(loss_fn)(params.step_size, previous_state, rng_key)
+
+        # updates, opt_state = optimizer.update(grads, opt_state)
+        # new_step_size = optax.apply_updates(params.step_size, updates)
+        new_step_size = params.step_size
+
+        jax.debug.print("stepsize {x}", x=(params.step_size,new_step_size))
+        # jax.debug.print("loss {x}", x=(loss_fn(params, state, keys[0])))
+
+
+        # todo: should i use different key here? seems slightly subtle
+        new_state, info = kernel(
+            rng_key=rng_key,
+            state=previous_state,
+            step_size=new_step_size,
+            avg_num_integration_steps=params.L / new_step_size,
+            sqrt_diag_cov=params.sqrt_diag_cov,
+        )
+
+        mask = 1.0
+
+        if fix_L:
+                params = params._replace(
+                    step_size=mask*new_step_size + (1 - mask) * params.step_size,
+                )
+
+        else:
+            params = params._replace(
+                step_size=mask * new_step_size + (1 - mask) * params.step_size,
+                L=mask * (params.L * (new_step_size / params.step_size))
+                + (1 - mask) * params.L,
+            )
+
+        return (params, new_state, opt_state), info
+
+
+    
+    def adam_adaptation(state, params, target_acceptance_rate, fix_L, keys):
+
+        start_learning_rate = 1e-1
+        optimizer = optax.adam(learning_rate=start_learning_rate)
+        opt_state = optimizer.init(params.step_size)
+
+        def loss_fn(step_size, state, key):
+            return 5.0
+            # _, info = kernel(
+            #         rng_key=key,
+            #         state=state,
+            #         step_size=step_size,
+            #         avg_num_integration_steps=params.L / step_size,
+            #         sqrt_diag_cov=params.sqrt_diag_cov,
+            #     )
+            
+            # return jnp.square(info.acceptance_rate.mean() - target_acceptance_rate)
+        
+        # adam_step(loss_fn, optimizer, opt_state, state, params, fix_L, keys[0])
+    
+        return jax.lax.scan(
+            lambda vars, key: adam_step(loss_fn=loss_fn, optimizer=optimizer, fix_L=fix_L, rng_key=key, opt_state=vars[2], previous_state=vars[1], params=vars[0]),
+            (params, state, opt_state),
+            keys
+        )
+
+        
 
     def L_step_size_adaptation(state, params, num_steps, rng_key):
         num_steps1, num_steps2 = int(num_steps * frac_tune1), int(
             num_steps * frac_tune2
         )
+
+        check_key, rng_key = jax.random.split(rng_key, 2)
 
         rng_key_pass1, rng_key_pass2 = jax.random.split(rng_key, 2)
         L_step_size_adaptation_keys_pass1 = jax.random.split(
@@ -251,6 +348,74 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             initial_da=initial_da,
             update_da=update_da,
         )
+
+
+        final_stepsize = final_da(dual_avg_state)
+
+        # jax.debug.print("stepsize {x}", x=params.step_size)
+        # jax.debug.print("L {x}", x=params.L)
+        # jax.debug.print("info {x}", x=info.acceptance_rate.mean())
+
+        # L_step_size_adaptation_keys_pass1 = jax.random.split(check_key, num_steps1)
+        # mask = jnp.zeros(num_steps1)
+
+        # (
+        #     (state, params, (dual_avg_state, step_size_max), (_, average)),
+        #     (info, params_history),
+        # ) = step_size_adaptation(
+        #     mask,
+        #     state,
+        #     params,
+        #     L_step_size_adaptation_keys_pass1,
+        #     fix_L=fix_L_first_da,
+        #     initial_da=initial_da,
+        #     update_da=update_da,
+        # )
+
+        # keys = jax.random.split(check_key, 1000)
+        # (params,state,opt_state), info = adam_adaptation(state, params, target, fix_L_first_da, keys)
+
+        # jax.debug.print("stepsize {x}", x=params.step_size)
+        # raise Exception
+
+        # keys = jax.random.split(check_key, 1000)
+        # _, info = jax.lax.scan(
+        #     lambda state, key: kernel(
+        #         rng_key=key,
+        #         state=state,
+        #         # step_size=params.step_size,
+        #         step_size=final_stepsize,
+        #         avg_num_integration_steps=params.L / params.step_size,
+        #         sqrt_diag_cov=params.sqrt_diag_cov,
+        #     ),
+        #     state,
+        #     keys
+        # )
+
+        # jax.debug.print("pst run {x}", x=info.acceptance_rate.mean())
+        # # jax.debug.print("cov {x}", x=params.sqrt_diag_cov)
+        # raise Exception
+
+        # num_steps_per_traj = params.L / params.step_size
+        # alg = blackjax.adjusted_mclmc(
+        #     logdensity_fn=lambda x : -0.5 * jnp.sum(jnp.square(x), axis= -1),
+        #     step_size=params.step_size,
+        #     integration_steps_fn=lambda k: jnp.ceil(jax.random.uniform(k) * rescale(num_steps_per_traj)),
+        #     integrator= isokinetic_mclachlan,
+        #     sqrt_diag_cov=1.0,
+        #     L_proposal_factor=jnp.inf,
+        # )
+        # _, (_, info) = run_inference_algorithm(
+        #     rng_key=jax.random.PRNGKey(0),
+        #     inference_algorithm=alg,
+        #     initial_state=state,
+        #     num_steps=2000 
+        # )
+
+        # jax.debug.print("pst run {x}", x=info.acceptance_rate.mean())
+        # raise Exception
+
+
 
         # determine L
         if num_steps2 != 0.0:
