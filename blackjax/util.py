@@ -202,3 +202,48 @@ def run_inference_algorithm(
     xs = (jnp.arange(num_steps), keys)
     final_state, (state_history, info_history) = lax.scan(one_step, initial_state, xs)
     return final_state, state_history, info_history
+
+
+def run_inference_algorithm_eca(
+    rng_key,
+    initial_state_or_position,
+    inference_algorithm,
+    summary,
+    adaptation,
+    num_steps,
+    progress_bar: bool = False
+    ):
+    """Wrapper to run an inference algorithm with and ensemble chain adaptation. The parallelization is achieved by sharding the chains among the available devices.
+    """
+    init_key, sample_key = split(rng_key, 2)
+    # try:
+    #     initial_state = inference_algorithm.init(initial_state_or_position, init_key)
+    #except (TypeError, ValueError, AttributeError, IndexError):
+    # We assume initial_state is already in the right format.
+    initial_state = initial_state_or_position
+
+    keys = split(sample_key, num_steps)
+
+    @jit
+    def _one_step(state_all, xs):
+        _, rng_key = xs
+        state, tunable_parameters, adaptation_state = state_all
+
+        state, info = sharded_step(rng_key, state, tunable_parameters)
+        
+        f = sharded_summary(state)
+        favg = jax.lax.psum(f) / chains
+        
+        tunable_parameters, adaptation_state = adaptation(tunable_parameters, favg)
+        
+        return (state, tunable_parameters, adaptation_state), info
+        
+        
+    if progress_bar:
+        one_step = progress_bar_scan(num_steps)(_one_step)
+    else:
+        one_step = _one_step
+
+    xs = (jnp.arange(num_steps), keys)
+    final_state, info_history = lax.scan(one_step, initial_state, xs)
+    return final_state, info_history
