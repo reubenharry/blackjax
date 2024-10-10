@@ -14,7 +14,7 @@
 """Progress bar decorators for use with step functions.
 Adapted from Jeremie Coullon's blog post :cite:p:`progress_bar`.
 """
-from fastprogress.fastprogress import progress_bar
+#from fastprogress.fastprogress import progress_bar
 from jax import lax
 from jax.experimental import host_callback
 

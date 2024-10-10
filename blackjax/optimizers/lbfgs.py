@@ -16,11 +16,11 @@ from typing import Callable, NamedTuple
 import jax
 import jax.numpy as jnp
 import jax.random
-import jaxopt
+#import jaxopt
 from jax import lax
 from jax.flatten_util import ravel_pytree
-from jaxopt._src.lbfgs import LbfgsState
-from jaxopt.base import OptStep
+#from jaxopt._src.lbfgs import LbfgsState
+#from jaxopt.base import OptStep
 
 from blackjax.types import Array, ArrayLikeTree
 
@@ -71,7 +71,7 @@ def minimize_lbfgs(
     ftol: float = 1e-05,
     maxls: int = 1000,
     **lbfgs_kwargs,
-) -> tuple[OptStep, LBFGSHistory]:
+): #-> tuple[OptStep, LBFGSHistory]:
     """
     Minimize a function using L-BFGS
 
@@ -157,7 +157,7 @@ def _minimize_lbfgs(
     ftol: float,
     maxls: int,
     **lbfgs_kwargs,
-) -> tuple[OptStep, LBFGSHistory]:
+) :#-> tuple[OptStep, LBFGSHistory]:
     def lbfgs_one_step(carry, i):
         (params, state), previous_history = carry
 
