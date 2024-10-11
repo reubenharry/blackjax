@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 from typing import Callable, NamedTuple, Any
 
-from blackjax.mcmc.integrators import IntegratorState, isokinetic_mclachlan, isokinetic_leapfrog
+from blackjax.mcmc.integrators import IntegratorState, isokinetic_leapfrog
 from blackjax.types import Array, ArrayLike
 from blackjax.util import pytree_size
 
@@ -29,13 +29,35 @@ from blackjax.mcmc.integrators import _normalized_flatten_array
 
 
 
+def no_nans(a):
+    flat_a, unravel_fn = ravel_pytree(a)
+    return jnp.all(jnp.isfinite(flat_a))
+
+
+def nan_reject(nonans, old, new):
+    """Equivalent to
+        return new if nonans else old"""
+        
+    return jax.lax.cond(nonans, lambda _: new, lambda _: old, operand=None)
+
+
+
 def build_kernel(logdensity_fn):
-    """MCLMC kernel"""
+    """MCLMC kernel (with nan rejection)"""
     
     kernel = mclmc.build_kernel(logdensity_fn= logdensity_fn, integrator= isokinetic_leapfrog)
     
+    
     def sequential_kernel(key, state, hyp):
-        return kernel(key, state, hyp.L, hyp.step_size)
+        
+        new_state, info = kernel(key, state, hyp.L, hyp.step_size)
+        
+        # reject the new state if there were nans
+        nonans = no_nans(new_state)
+        new_state = nan_reject(nonans, state, new_state)
+        
+        return new_state, {'nans': 1-nonans, 'energy_change': info.energy_change * nonans}
+
     
     return sequential_kernel
 
@@ -80,8 +102,8 @@ class Hyperparameters(NamedTuple):
 
 class AdaptationState(NamedTuple):
     steps: int
-    eevpd: float
-    eevpd_wanted: float
+    EEVPD: float
+    EEVPD_wanted: float
     #history: Array
     
     hyperparameters: Any
@@ -100,11 +122,17 @@ def equipartition_diagonal_loss(Eii):
 
 class Adaptation:
     
-    def __init__(self, num_dims, alpha= 1., C= 0.1):
+    def __init__(self, num_dims, 
+                 alpha= 1., C= 0.1, 
+                 monitor_exp_vals= lambda x: 0., contract_exp_vals= lambda exp_vals: 0.
+                 ):
 
-        self.num_dims = num_dims        
+        self.num_dims = num_dims
         self.alpha = alpha
         self.C = C
+        self.monitor_exp_vals = monitor_exp_vals
+        self.contract_exp_vals = contract_exp_vals
+
         #delay_num = (int)(jnp.rint(delay_frac * num_steps))    
         #sigma = unravel_fn(jnp.ones(flat_pytree.shape, dtype = flat_pytree.dtype))
         
@@ -114,17 +142,20 @@ class Adaptation:
         #history = jnp.concatenate((jnp.ones(1) * 1e50, jnp.ones(delay_num-1) * jnp.inf)) # loss history
         
         self.initial_state = AdaptationState(0, 1e-3, 1e-3, hyp)
-
- 
+        
+        
     def summary_statistics(self, state, info):
     
         position_flat, unravel_fn = ravel_pytree(state.position)
         
         return {'equipartition_diagonal': equipartition_diagonal(state), 
                 'x': position_flat, 'xsq': jnp.square(position_flat), 
-                'E': info.energy_change, 'Esq': jnp.square(info.energy_change)}
-    
-           
+                'E': info['energy_change'], 'Esq': jnp.square(info['energy_change']),
+                'rejection_rate_nans': info['nans'],
+                'monitored_exp_vals': self.monitor_exp_vals(state.position)
+                }
+        
+        
     def update(self, adaptation_state, Etheta, key_adaptation):
 
         hyp = adaptation_state.hyperparameters
@@ -133,17 +164,16 @@ class Adaptation:
         equi_diag = equipartition_diagonal_loss(Etheta['equipartition_diagonal'])
         L = self.alpha * jnp.sqrt(jnp.sum(Etheta['xsq'] - jnp.square(Etheta['x']))) # average over the ensemble, sum over parameters (to get sqrt(d))
         EEVPD = (Etheta['Esq'] - jnp.square(Etheta['E'])) / self.num_dims
+        nans = Etheta['rejection_rate_nans'] > 0
+        contracted_exp_vals = self.contract_exp_vals(Etheta['monitored_exp_vals'])
         
-        # # reject the new state if there were nans
-        # nonans = no_nans(_state.position)
-        # eevpd, state = nan_reject(nonans, (adap_state.eevpd, state), (eevpd, _state))
 
         # hyperparameter adaptation                                              
         bias = equi_diag #estimate the bias from the equipartition loss
-        eevpd_wanted = self.C * jnp.power(bias, 3./8.)
+        EEVPD_wanted = self.C * jnp.power(bias, 3./8.)
         
-        eps_factor = jnp.power(eevpd_wanted / EEVPD, 1./6.)
-        #eps_factor = nonans * eps_factor + (1-nonans) * 0.5
+        eps_factor = jnp.power(EEVPD_wanted / EEVPD, 1./6.)
+        eps_factor = nans * 0.5 + (1-nans) * eps_factor # reduce the stepsize if there were nans
         eps_factor = jnp.clip(eps_factor, 0.3, 3.)
         
         hyp = Hyperparameters(L, hyp.step_size * eps_factor)
@@ -154,21 +184,10 @@ class Adaptation:
         #cond = decreasing and (adap_state.steps < max_iter)
         #cond = (adap_state.steps < max_iter)
 
-        info_to_be_stored = {'L': L, 'step_size': hyp.step_size, 'eevpd_wanted': eevpd_wanted, 'eevpd': EEVPD, 'equi_diag': equi_diag}#, 'bavg': bavg, 'bmax': bmax}
+        info_to_be_stored = {'L': L, 'step_size': hyp.step_size, 
+                             'EEVPD_wanted': EEVPD_wanted, 'EEVPD': EEVPD, 
+                             'equi_diag': equi_diag, 'contracted_exp_vals': contracted_exp_vals}
     
-        return AdaptationState(adaptation_state.steps + 1, EEVPD, eevpd_wanted, hyp), info_to_be_stored
+        return AdaptationState(adaptation_state.steps + 1, EEVPD, EEVPD_wanted, hyp), info_to_be_stored
     
-
-
-def no_nans(a):
-    flat_a, unravel_fn = ravel_pytree(a)
-    return jnp.all(jnp.isfinite(flat_a))
-
-
-def nan_reject(nonans, old, new):
-    """Equivalent to
-        return new if nonans else old"""
-    
-    # TODO: jnp.nan_to_num(new)?
-    return jax.lax.cond(nonans, lambda _: new, lambda _: old, operand=None)
 

@@ -41,60 +41,32 @@ def init(
     logdensity, logdensity_grad = jax.value_and_grad(logdensity_fn)(position)
     return DynamicHMCState(position, logdensity, logdensity_grad, random_generator_arg)
 
-def build_kernel(
+
+def build_kernel_malt(
+    logdensity_fn: Callable,
     integrator: Callable = integrators.isokinetic_mclachlan,
     divergence_threshold: float = 1000,
-    next_random_arg_fn: Callable = lambda key: jax.random.split(key)[1],
-    integration_steps_fn: Callable = lambda key: jax.random.randint(key, (), 1, 10),
 ):
-    """Build a Dynamic MHMCHMC kernel where the number of integration steps is chosen randomly.
-
-    Parameters
-    ----------
-    integrator
-        The integrator to use to integrate the Hamiltonian dynamics.
-    divergence_threshold
-        Value of the difference in energy above which we consider that the transition is divergent.
-    next_random_arg_fn
-        Function that generates the next `random_generator_arg` from its previous value.
-    integration_steps_fn
-        Function that generates the next pseudo or quasi-random number of integration steps in the
-        sequence, given the current `random_generator_arg`. Needs to return an `int`.
-
-    Returns
-    -------
-    A kernel that takes a rng_key and a Pytree that contains the current state
-    of the chain and that returns a new state of the chain along with
-    information about the transition.
-
-    """
-
+    
+    dynamics = integrators.with_isokinetic_maruyama(integrator(logdensity_fn))
+    
     def kernel(
         rng_key: PRNGKey,
-        state: DynamicHMCState,
-        logdensity_fn: Callable,
+        state: HMCState,
         step_size: float,
-        Lpartial : float = 1.0
-    ) -> tuple[DynamicHMCState, HMCInfo]:
+        Lpartial : float = 1.0,
+        steps_per_sample: int = 10
+    ) -> tuple[HMCState, HMCInfo]:
         """Generate a new sample with the MHMCHMC kernel."""
-        
-        num_integration_steps = integration_steps_fn(
-            state.random_generator_arg
-        )
 
         key_momentum, key_integrator = jax.random.split(rng_key, 2)
         momentum = generate_unit_vector(key_momentum, state.position)
 
-        # jax.debug.print("{x} num_integration_steps", x=(num_integration_steps, step_size, num_integration_steps*step_size))
-        # jax.debug.print("{x} step size\n\n", x=(step_size))
-
-
         proposal, info, _ = mhmclmc_proposal(
-            # integrators.with_isokinetic_maruyama(integrator(logdensity_fn)),
-            lambda state, step_size, x, y : (integrator(logdensity_fn))(state, step_size),
+            dynamics,
             step_size,
             Lpartial,
-            num_integration_steps,
+            steps_per_sample,
             divergence_threshold,
         )(
             key_integrator, 
@@ -104,75 +76,16 @@ def build_kernel(
         )
 
         return (
-            DynamicHMCState(
+            HMCState(
                 proposal.position,
                 proposal.logdensity,
                 proposal.logdensity_grad,
-                next_random_arg_fn(state.random_generator_arg),
             ),
             info,
         )
 
     return kernel
 
-class mhmclmc:
-    """Implements the (basic) user interface for the dynamic MHMCHMC kernel.
-
-    Parameters
-    ----------
-    logdensity_fn
-        The log-density function we wish to draw samples from.
-    step_size
-        The value to use for the step size in the symplectic integrator.
-    divergence_threshold
-        The absolute value of the difference in energy between two states above
-        which we say that the transition is divergent. The default value is
-        commonly found in other libraries, and yet is arbitrary.
-    integrator
-        (algorithm parameter) The symplectic integrator to use to integrate the trajectory.
-    next_random_arg_fn
-        Function that generates the next `random_generator_arg` from its previous value.
-    integration_steps_fn
-        Function that generates the next pseudo or quasi-random number of integration steps in the
-        sequence, given the current `random_generator_arg`.
-
-
-    Returns
-    -------
-    A ``SamplingAlgorithm``.
-    """
-
-    init = staticmethod(init)
-    build_kernel = staticmethod(build_kernel)
-
-    def __new__(  # type: ignore[misc]
-        cls,
-        logdensity_fn: Callable,
-        step_size: float,
-        Lpartial : float = 0.6,
-        *,
-        divergence_threshold: int = 1000,
-        integrator: Callable = integrators.isokinetic_mclachlan,
-        next_random_arg_fn: Callable = lambda key: jax.random.split(key)[1],
-        integration_steps_fn: Callable = lambda key: jax.random.randint(key, (), 1, 10),
-    ) -> SamplingAlgorithm:
-        kernel = cls.build_kernel(
-            integrator, divergence_threshold, next_random_arg_fn, integration_steps_fn
-        )
-
-        def init_fn(position: ArrayLikeTree, rng_key: Array):
-            return cls.init(position, logdensity_fn, rng_key)
-
-        def step_fn(rng_key: PRNGKey, state):
-            return kernel(
-                rng_key,
-                state,
-                logdensity_fn,
-                step_size,
-                Lpartial,
-            )
-
-        return SamplingAlgorithm(init_fn, step_fn)  # type: ignore[arg-type]
 
 
 def mhmclmc_proposal(

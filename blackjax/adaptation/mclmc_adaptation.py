@@ -36,6 +36,7 @@ class MCLMCAdaptationState(NamedTuple):
 
     L: float
     step_size: float
+    
 
 def streaming_average(O, x, streaming_avg, weight, zero_prevention):
     """streaming average of f(x)"""
