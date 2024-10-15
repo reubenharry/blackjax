@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 
 from blackjax.util import run_eca
-from blackjax.mcmc.integrators import isokinetic_mclachlan, isokinetic_leapfrog
+from blackjax.mcmc.integrators import isokinetic_mclachlan, isokinetic_velocity_verlet
 from blackjax.mcmc.hmc import HMCState
 from blackjax.mcmc.mhmclmc import build_kernel_malt
 import blackjax.adaptation.ensemble_umclmc as umclmc
@@ -32,7 +32,6 @@ from blackjax.adaptation.step_size import dual_averaging_adaptation
 
 class Hyperparameters(NamedTuple):
     steps_per_sample: float
-    Lpartial: float
     step_size: float
     
 
@@ -50,7 +49,7 @@ def build_kernel(logdensity_fn, integrator):
     kernel = build_kernel_malt(logdensity_fn, integrator)
     
     def sequential_kernel(key, state, hyp):
-        return kernel(key, state, step_size= hyp.step_size, steps_per_sample= hyp.steps_per_sample, Lpartial= hyp.Lpartial)
+        return kernel(key, state, step_size= hyp.step_size, num_integration_steps= hyp.steps_per_sample)
     
     return sequential_kernel
 
@@ -71,7 +70,7 @@ class Adaptation:
     
     def __init__(self, adap_state, 
                  num_dims, 
-                 mclachlan, steps_per_sample, acc_prob_target= 0.8, Lpartial_Lfull_ratio = 1.25,
+                 mclachlan, steps_per_sample, acc_prob_target= 0.8,
                  monitor_exp_vals= lambda x: 0., contract_exp_vals= lambda exp_vals: 0.):
         
         self.monitor_exp_vals = monitor_exp_vals
@@ -89,14 +88,10 @@ class Adaptation:
         adjustment_factor = jnp.power(0.82 / (num_dims * adap_state.EEVPD), 0.25) / jnp.sqrt(steps_per_sample)
         
         step_size = adap_state.hyperparameters.step_size * integrator_factor * adjustment_factor
-        
-        # Lpartial
-        Lfull = steps_per_sample * step_size
-        Lpartial = Lpartial_Lfull_ratio * Lfull
 
         #steps_per_sample = (int)(jnp.max(jnp.array([Lfull / step_size, 1])))
         
-        hyp = Hyperparameters(steps_per_sample, Lpartial, step_size)
+        hyp = Hyperparameters(steps_per_sample, step_size)
         
         
         ### Initialize the dual averaging adaptation ###
@@ -127,7 +122,7 @@ class Adaptation:
         step_size = jnp.exp(da_state.log_step_size)
         
         hyp = adaptation_state.hyperparameters
-        hyp = Hyperparameters(hyp.steps_per_sample, hyp.Lpartial, step_size)
+        hyp = Hyperparameters(hyp.steps_per_sample, step_size)
         
         info_to_be_stored = {'L': hyp.step_size * hyp.steps_per_sample, 'steps_per_sample': hyp.steps_per_sample, 'step_size': hyp.step_size, 
                              'acc_prob': acc_prob,
@@ -165,7 +160,7 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, key,
     
     
     ### refine the results with the adjusted method ###
-    integrator, gradient_calls_per_step = (isokinetic_mclachlan, 2) if mclachlan else (isokinetic_leapfrog, 1)
+    integrator, gradient_calls_per_step = (isokinetic_mclachlan, 2) if mclachlan else (isokinetic_velocity_verlet, 1)
     kernel = build_kernel(model.logdensity_fn, integrator)
     init = Initialization(final_state)
     adap = Adaptation(final_adaptation_state, model.ndims, 

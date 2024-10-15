@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 from typing import Callable, NamedTuple, Any
 
-from blackjax.mcmc.integrators import IntegratorState, isokinetic_leapfrog
+from blackjax.mcmc.integrators import IntegratorState, isokinetic_velocity_verlet
 from blackjax.types import Array, ArrayLike
 from blackjax.util import pytree_size
 
@@ -45,7 +45,7 @@ def nan_reject(nonans, old, new):
 def build_kernel(logdensity_fn):
     """MCLMC kernel (with nan rejection)"""
     
-    kernel = mclmc.build_kernel(logdensity_fn= logdensity_fn, integrator= isokinetic_leapfrog)
+    kernel = mclmc.build_kernel(logdensity_fn= logdensity_fn, integrator= isokinetic_velocity_verlet)
     
     
     def sequential_kernel(key, state, hyp):

@@ -19,22 +19,20 @@ import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 from jax.random import normal
 
-
 from blackjax.mcmc.metrics import KineticEnergy
 from blackjax.types import ArrayTree
 
 __all__ = [
     "mclachlan",
+    "omelyan",
     "velocity_verlet",
-    "velocity_verlet_coefficients"
-    "mclachlan_coefficients"
-    "yoshida_coefficients"
     "yoshida",
     "with_isokinetic_maruyama",
-    "implicit_midpoint",
-    "isokinetic_leapfrog",
+    "isokinetic_velocity_verlet",
     "isokinetic_mclachlan",
+    "isokinetic_omelyan",
     "isokinetic_yoshida",
+    "implicit_midpoint",
 ]
 
 
@@ -75,7 +73,7 @@ def generalized_two_stage_integrator(
 
     .. math:: \\frac{d}{dt}f = (O_1+O_2)f
 
-    The leapfrog operator can be seen as approximating :math:`e^{\\epsilon(O_1 + O_2)}`
+    The velocity_verlet operator can be seen as approximating :math:`e^{\\epsilon(O_1 + O_2)}`
     by :math:`e^{\\epsilon O_1/2}e^{\\epsilon O_2}e^{\\epsilon O_1/2}`.
 
     In a standard Hamiltonian, the forms of :math:`e^{\\epsilon O_2}` and
@@ -292,6 +290,20 @@ a2 = 1 - 2 * a1
 yoshida_coefficients = [b1, a1, b2, a2, b2, a1, b1]
 yoshida = generate_euclidean_integrator(yoshida_coefficients)
 
+"""
+Eleven-stage palindromic symplectic integrator derived in :cite:p:`omelyan2003symplectic`.
+
+Popular in LQCD, see also :cite:p:`takaishi2006testing`.
+"""
+b1 = 0.08398315262876693
+a1 = 0.2539785108410595
+b2 = 0.6822365335719091
+a2 = -0.03230286765269967
+b3 = 0.5 - b1 - b2
+a3 = 1 - 2 * (a1 + a2)
+omelyan_coefficients = [b1, a1, b2, a2, b3, a3, b3, a2, b2, a1, b1]
+omelyan = generate_euclidean_integrator(omelyan_coefficients)
+
 
 # Intergrators with non Euclidean updates
 def _normalized_flatten_array(x, tol=1e-13):
@@ -299,43 +311,49 @@ def _normalized_flatten_array(x, tol=1e-13):
     return jnp.where(norm > tol, x / norm, x), norm
 
 
-def esh_dynamics_momentum_update_one_step(
-    momentum: ArrayTree,
-    logdensity_grad: ArrayTree,
-    step_size: float,
-    coef: float,
-    previous_kinetic_energy_change=None,
-    is_last_call=False,
-):
-    """Momentum update based on Esh dynamics.
+def esh_dynamics_momentum_update_one_step(sqrt_diag_cov=1.0):
+    def update(
+        momentum: ArrayTree,
+        logdensity_grad: ArrayTree,
+        step_size: float,
+        coef: float,
+        previous_kinetic_energy_change=None,
+        is_last_call=False,
+    ):
+        """Momentum update based on Esh dynamics.
 
-    The momentum updating map of the esh dynamics as derived in :cite:p:`steeg2021hamiltonian`
-    There are no exponentials e^delta, which prevents overflows when the gradient norm
-    is large.
-    """
-    del is_last_call
+        The momentum updating map of the esh dynamics as derived in :cite:p:`steeg2021hamiltonian`
+        There are no exponentials e^delta, which prevents overflows when the gradient norm
+        is large.
+        """
+        del is_last_call
 
-    flatten_grads, unravel_fn = ravel_pytree(logdensity_grad)
-    flatten_momentum, _ = ravel_pytree(momentum)
-    dims = flatten_momentum.shape[0]
-    normalized_gradient, gradient_norm = _normalized_flatten_array(flatten_grads)
-    momentum_proj = jnp.dot(flatten_momentum, normalized_gradient)
-    delta = step_size * coef * gradient_norm / (dims - 1)
-    zeta = jnp.exp(-delta)
-    new_momentum_raw = (
-        normalized_gradient * (1 - zeta) * (1 + zeta + momentum_proj * (1 - zeta))
-        + 2 * zeta * flatten_momentum
-    )
-    new_momentum_normalized, _ = _normalized_flatten_array(new_momentum_raw)
-    next_momentum = unravel_fn(new_momentum_normalized)
-    kinetic_energy_change = (
-        delta
-        - jnp.log(2)
-        + jnp.log(1 + momentum_proj + (1 - momentum_proj) * zeta**2)
-    ) * (dims - 1)
-    if previous_kinetic_energy_change is not None:
-        kinetic_energy_change += previous_kinetic_energy_change
-    return next_momentum, next_momentum, kinetic_energy_change
+        logdensity_grad = logdensity_grad
+        flatten_grads, unravel_fn = ravel_pytree(logdensity_grad)
+        flatten_grads = flatten_grads * sqrt_diag_cov
+        flatten_momentum, _ = ravel_pytree(momentum)
+        dims = flatten_momentum.shape[0]
+        normalized_gradient, gradient_norm = _normalized_flatten_array(flatten_grads)
+        momentum_proj = jnp.dot(flatten_momentum, normalized_gradient)
+        delta = step_size * coef * gradient_norm / (dims - 1)
+        zeta = jnp.exp(-delta)
+        new_momentum_raw = (
+            normalized_gradient * (1 - zeta) * (1 + zeta + momentum_proj * (1 - zeta))
+            + 2 * zeta * flatten_momentum
+        )
+        new_momentum_normalized, _ = _normalized_flatten_array(new_momentum_raw)
+        gr = unravel_fn(new_momentum_normalized * sqrt_diag_cov)
+        next_momentum = unravel_fn(new_momentum_normalized)
+        kinetic_energy_change = (
+            delta
+            - jnp.log(2)
+            + jnp.log(1 + momentum_proj + (1 - momentum_proj) * zeta**2)
+        ) * (dims - 1)
+        if previous_kinetic_energy_change is not None:
+            kinetic_energy_change += previous_kinetic_energy_change
+        return next_momentum, gr, kinetic_energy_change
+
+    return update
 
 
 def format_isokinetic_state_output(
@@ -356,11 +374,11 @@ def format_isokinetic_state_output(
 
 def generate_isokinetic_integrator(coefficients):
     def isokinetic_integrator(
-        logdensity_fn: Callable, *args, **kwargs
+        logdensity_fn: Callable, sqrt_diag_cov: ArrayTree = 1.0
     ) -> GeneralIntegrator:
         position_update_fn = euclidean_position_update_fn(logdensity_fn)
         one_step = generalized_two_stage_integrator(
-            esh_dynamics_momentum_update_one_step,
+            esh_dynamics_momentum_update_one_step(sqrt_diag_cov),
             position_update_fn,
             coefficients,
             format_output_fn=format_isokinetic_state_output,
@@ -370,9 +388,12 @@ def generate_isokinetic_integrator(coefficients):
     return isokinetic_integrator
 
 
-isokinetic_leapfrog = generate_isokinetic_integrator(velocity_verlet_coefficients)
+isokinetic_velocity_verlet = generate_isokinetic_integrator(
+    velocity_verlet_coefficients
+)
 isokinetic_yoshida = generate_isokinetic_integrator(yoshida_coefficients)
 isokinetic_mclachlan = generate_isokinetic_integrator(mclachlan_coefficients)
+isokinetic_omelyan = generate_isokinetic_integrator(omelyan_coefficients)
 
 
 def partially_refresh_momentum(momentum, rng_key, step_size, L):
@@ -393,26 +414,46 @@ def partially_refresh_momentum(momentum, rng_key, step_size, L):
     -------
     momentum with random change in angle
     """
+
     m, unravel_fn = ravel_pytree(momentum)
     dim = m.shape[0]
     nu = jnp.sqrt((jnp.exp(2 * step_size / L) - 1.0) / dim)
     z = nu * normal(rng_key, shape=m.shape, dtype=m.dtype)
-    return unravel_fn((m + z) / jnp.linalg.norm(m + z))
+    new_momentum = unravel_fn((m + z) / jnp.linalg.norm(m + z))
+    # return new_momentum
+    return jax.lax.cond(
+        jnp.isinf(L),
+        lambda _: momentum,
+        lambda _: new_momentum,
+        operand=None,
+    )
 
 
 def with_isokinetic_maruyama(integrator):
-    
-    def stochastic_integrator(init_state, step_size, Lpartial, rng_key):
-        
+    def stochastic_integrator(init_state, step_size, L_proposal, rng_key):
         key1, key2 = jax.random.split(rng_key)
         # partial refreshment
-        state = init_state._replace(momentum=partially_refresh_momentum(momentum=init_state.momentum, rng_key=key1, L=Lpartial, step_size=step_size * 0.5))
+        state = init_state._replace(
+            momentum=partially_refresh_momentum(
+                momentum=init_state.momentum,
+                rng_key=key1,
+                L=L_proposal,
+                step_size=step_size * 0.5,
+            )
+        )
         # one step of the deterministic dynamics
         state, info = integrator(state, step_size)
         # partial refreshment
-        state = state._replace(momentum=partially_refresh_momentum(momentum=state.momentum, rng_key=key2, L=Lpartial, step_size=step_size * 0.5))
+        state = state._replace(
+            momentum=partially_refresh_momentum(
+                momentum=state.momentum,
+                rng_key=key2,
+                L=L_proposal,
+                step_size=step_size * 0.5,
+            )
+        )
         return state, info
-    
+
     return stochastic_integrator
 
 
