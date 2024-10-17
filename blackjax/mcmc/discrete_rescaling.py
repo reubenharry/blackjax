@@ -90,7 +90,7 @@ def build_kernel(logdensity_fn, sqrt_diag_cov, integrator):
         nu = jnp.sqrt((jnp.exp(2*step_size / L) - 1)/dim)
         z = jax.random.normal(rng_key, shape=(dim,))
 
-        momentum = momentum + (nu*z) / jnp.linalg.norm(nu*z)
+        momentum = (momentum + (nu*z)) / jnp.linalg.norm(momentum + nu*z)
         kinetic_change = kinetic_energy_fn(state.momentum) - kinetic_energy_fn(momentum)
 
         return IntegratorState(
