@@ -1,5 +1,6 @@
 from . import (
     adjusted_mclmc,
+    discrete_rescaling,
     barker,
     elliptical_slice,
     ghmc,
@@ -15,6 +16,7 @@ from . import (
 
 __all__ = [
     "barker",
+    "discrete_rescaling",
     "elliptical_slice",
     "ghmc",
     "hmc",

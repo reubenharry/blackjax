@@ -361,7 +361,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
         # jax.debug.print("stepsize {x}", x=params.step_size)
         # jax.debug.print("L {x}", x=params.L)
-        jax.debug.print("info {x}", x=info.acceptance_rate.mean())
+        # jax.debug.print("info {x}", x=info.acceptance_rate.mean())
 
         # L_step_size_adaptation_keys_pass1 = jax.random.split(check_key, num_steps1)
         # mask = jnp.zeros(num_steps1)

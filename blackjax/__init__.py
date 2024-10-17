@@ -13,6 +13,7 @@ from .base import SamplingAlgorithm, VIAlgorithm
 from .diagnostics import effective_sample_size as ess
 from .diagnostics import potential_scale_reduction as rhat
 from .mcmc import adjusted_mclmc as _adjusted_mclmc
+from .mcmc import discrete_rescaling as _discrete_rescaling
 from .mcmc import barker
 from .mcmc import dynamic_hmc as _dynamic_hmc
 from .mcmc import elliptical_slice as _elliptical_slice
@@ -112,6 +113,7 @@ additive_step_random_walk.register_factory("normal_random_walk", normal_random_w
 
 mclmc = generate_top_level_api_from(_mclmc)
 adjusted_mclmc = generate_top_level_api_from(_adjusted_mclmc)
+discrete_rescaling = generate_top_level_api_from(_discrete_rescaling)
 elliptical_slice = generate_top_level_api_from(_elliptical_slice)
 ghmc = generate_top_level_api_from(_ghmc)
 barker_proposal = generate_top_level_api_from(barker)
