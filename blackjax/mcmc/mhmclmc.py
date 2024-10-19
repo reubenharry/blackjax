@@ -116,7 +116,6 @@ def adjusted_mclmc_proposal(
             state, kinetic_energy, rng_key = vars
             rng_key, next_rng_key = jax.random.split(rng_key)
             next_state, next_kinetic_energy = integrator(state, step_size, L_proposal, rng_key)
-
             return next_state, kinetic_energy + next_kinetic_energy, next_rng_key
         
         return jax.lax.fori_loop(0, num_integration_steps, step, (state, 0, rng_key))
