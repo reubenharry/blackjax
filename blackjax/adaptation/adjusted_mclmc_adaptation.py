@@ -41,6 +41,7 @@ def adjusted_mclmc_find_L_and_step_size(
     frac_tune3=0.1,
     diagonal_preconditioning=True,
     params=None,
+    max=False,
 ):
     """
     Finds the optimal value of the parameters for the MH-MCHMC algorithm.
@@ -95,6 +96,7 @@ def adjusted_mclmc_find_L_and_step_size(
         frac_tune2=frac_tune2,
         target=target,
         diagonal_preconditioning=diagonal_preconditioning,
+        max=max,
     )(
         state, params, num_steps, part1_key
     )
@@ -104,7 +106,7 @@ def adjusted_mclmc_find_L_and_step_size(
         part2_key1, part2_key2 = jax.random.split(part2_key, 2)
 
         state, params = adjusted_mclmc_make_adaptation_L(
-            mclmc_kernel, frac=frac_tune3, Lfactor=0.4
+            mclmc_kernel, frac=frac_tune3, Lfactor=0.4, max=max
         )(state, params, num_steps, part2_key1)
 
         # jax.debug.print("params after stage 3 {x}", x=params)
@@ -121,6 +123,7 @@ def adjusted_mclmc_find_L_and_step_size(
             target=target,
             fix_L_first_da=True,
             diagonal_preconditioning=diagonal_preconditioning,
+            max=max,
         )(
             state, params, num_steps, part2_key2
         )
@@ -140,6 +143,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
     target,
     diagonal_preconditioning,
     fix_L_first_da=False,
+    max=False,
 ):
     """Adapts the stepsize and L of the MCLMC kernel. Designed for the unadjusted MCLMC"""
 
@@ -428,9 +432,14 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             x_average, x_squared_average = average[0], average[1]
             variances = x_squared_average - jnp.square(x_average)
 
+            if max:
+                contract = lambda x: jnp.max(x)*dim
+            else:
+                contract = jnp.sum
+
             change = jax.lax.clamp(
                 Lratio_lowerbound,
-                jnp.sqrt(jnp.sum(variances)) / params.L,
+                jnp.sqrt(contract(variances)) / params.L,
                 Lratio_upperbound,
             )
             params = params._replace(
@@ -480,7 +489,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
     return L_step_size_adaptation
 
 
-def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor):
+def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor, max=False):
     """determine L by the autocorrelations (around 10 effective samples are needed for this to be accurate)"""
 
     def adaptation_L(state, params, num_steps, key):
@@ -503,9 +512,14 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor):
             xs=adaptation_L_keys,
         )
 
+        if max:
+            contract = jnp.min
+        else:
+            contract = jnp.mean
+
         flat_samples = jax.vmap(lambda x: ravel_pytree(x)[0])(samples)
         # number of effective samples per 1 actual sample
-        ess = jnp.mean(effective_sample_size(flat_samples[None, ...]))/num_steps
+        ess = contract(effective_sample_size(flat_samples[None, ...]))/num_steps
 
         # jax.debug.print("{x}foo", x=jnp.mean(ess)/num_steps)
 
