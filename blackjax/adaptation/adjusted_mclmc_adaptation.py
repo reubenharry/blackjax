@@ -42,6 +42,7 @@ def adjusted_mclmc_find_L_and_step_size(
     diagonal_preconditioning=True,
     params=None,
     max=False,
+    num_windows=1,
 ):
     """
     Finds the optimal value of the parameters for the MH-MCHMC algorithm.
@@ -84,22 +85,24 @@ def adjusted_mclmc_find_L_and_step_size(
 
     part1_key, part2_key = jax.random.split(rng_key, 2)
 
-    (
-        state,
-        params,
-        params_history,
-        final_da_val,
-    ) = adjusted_mclmc_make_L_step_size_adaptation(
-        kernel=mclmc_kernel,
-        dim=dim,
-        frac_tune1=frac_tune1,
-        frac_tune2=frac_tune2,
-        target=target,
-        diagonal_preconditioning=diagonal_preconditioning,
-        max=max,
-    )(
-        state, params, num_steps, part1_key
-    )
+    for _ in range(num_windows):
+        part1_key = jax.random.split(part1_key)[0]
+        (
+            state,
+            params,
+            params_history,
+            final_da_val,
+        ) = adjusted_mclmc_make_L_step_size_adaptation(
+            kernel=mclmc_kernel,
+            dim=dim,
+            frac_tune1=frac_tune1,
+            frac_tune2=frac_tune2,
+            target=target,
+            diagonal_preconditioning=diagonal_preconditioning,
+            max=max,
+        )(
+            state, params, num_steps, part1_key
+        )
     # jax.debug.print("params after stage 2 {x}", x=params)
 
     if frac_tune3 != 0:
