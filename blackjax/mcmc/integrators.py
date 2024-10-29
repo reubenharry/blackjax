@@ -101,12 +101,15 @@ def generalized_two_stage_integrator(
         Integrator function.
     """
 
-    def one_step(state: IntegratorState, step_size: float):
+    def one_step(state: IntegratorState, step_size: float, rng_key):
         position, momentum, _, logdensity_grad = state
         # auxiliary infomation generated during integration for diagnostics. It is
         # updated by the operator1 and operator2 at each call.
         momentum_update_info = None
         position_update_info = None
+        
+        keys= jax.random.split(rng_key, len(coefficients)//2)
+        
         for i, coef in enumerate(coefficients[:-1]):
             if i % 2 == 0:
                 momentum, kinetic_grad, momentum_update_info = operator1(
@@ -124,6 +127,7 @@ def generalized_two_stage_integrator(
                     logdensity_grad,
                     position_update_info,
                 ) = operator2(
+                    keys[i//2],
                     position,
                     kinetic_grad,
                     step_size,
@@ -157,10 +161,17 @@ def new_integrator_state(logdensity_fn, position, momentum):
     return IntegratorState(position, momentum, logdensity, logdensity_grad)
 
 
-def euclidean_position_update_fn(logdensity_fn: Callable):
-    logdensity_and_grad_fn = jax.value_and_grad(logdensity_fn)
-
+def euclidean_position_update_fn(logdensity_fn: Callable, gradient_noise_sigma= 0.):
+    
+    exact_logdensity_and_grad_fn = jax.value_and_grad(logdensity_fn)
+    
+    def logdensity_and_grad_fn(position, rng_key):
+        logdensity, logdensity_grad = exact_logdensity_and_grad_fn(position)
+        noise = gradient_noise_sigma * jax.random.normal(rng_key, shape= position.shape)
+        return logdensity, logdensity_grad + noise
+    
     def update(
+        rng_key,
         position: ArrayTree,
         kinetic_grad: ArrayTree,
         step_size: float,
@@ -187,14 +198,16 @@ def euclidean_momentum_update_fn(kinetic_energy_fn: KineticEnergy):
         logdensity_grad: ArrayTree,
         step_size: float,
         coef: float,
+        rng_key,
         auxiliary_info=None,
         is_last_call=False,
     ):
         del auxiliary_info
+        noise = # postin shape
         new_momentum = jax.tree_util.tree_map(
             lambda x, grad: x + step_size * coef * grad,
             momentum,
-            logdensity_grad,
+            logdensity_grad + noise,
         )
         if is_last_call:
             return new_momentum, None, None
