@@ -207,55 +207,42 @@ def run_inference_algorithm(
     return final_state, state_history, info_history
 
 
+def eca_step(kernel, summary_statistics_fn, adaptation_update, num_chains):
 
-
-def run_eca(rng_key, kernel, initialization, adaptation, num_steps, num_chains, mesh, progress_bar = False):
-    """initialization should have attribute functions:
-        sequential_init: key -> state
-        summary_statistics: x -> f(x)
-        ensemble_init: state, E_ensemble[f(x)] -> state
-    """
-    
-
-    def _one_step(state_all, xs):
+    def step(state_all, xs):
         """This function operates on a single device."""
         state, adaptation_state = state_all # state is an array of states, one for each chain on this device. adaptation_state is the same for all chains, so it is not an array.
         _, keys_sampling, key_adaptation = xs # keys_sampling.shape = (chains_per_device, )
         
         # update the state of all chains on this device
-        state, info = vmap(kernel, (0, 0, None))(keys_sampling, state, adaptation_state.hyperparameters)
+        state, info = vmap(kernel, (0, 0, None))(keys_sampling, state, adaptation_state)
         
         # combine all the chains to compute expectation values
-        theta = vmap(adaptation.summary_statistics, (0, 0))(state, info)
+        theta = vmap(summary_statistics_fn, (0, 0))(state, info)
         Etheta = tree_map(lambda theta: lax.psum(jnp.sum(theta, axis= 0), axis_name= 'chains') / num_chains, theta)
 
         # use these to adapt the hyperparameters of the dynamics
-        adaptation_state, info_to_be_stored = adaptation.update(adaptation_state, Etheta, key_adaptation)
+        adaptation_state, info_to_be_stored = adaptation_update(adaptation_state, Etheta, key_adaptation)
         
         return (state, adaptation_state), info_to_be_stored
 
-
-    if progress_bar:
-        one_step = progress_bar_scan(num_steps)(_one_step)
-        raise NotImplementedError('progress_bar is not implemented yet for run_eca.')
-    else:
-        one_step = _one_step
+    return step
 
 
-    def all_steps(keys_init, keys_sampling, keys_adaptation):
+def run_eca(rng_key, initial_state, kernel, adaptation, num_steps, num_chains, mesh):
+ 
+    step = eca_step(kernel, adaptation.summary_statistics_fn, adaptation.update, num_chains)
+
+
+    def all_steps(initial_state, keys_sampling, keys_adaptation):
         """This function operates on a single device. key is a random key for this device."""
-        
-        # initialization
-        initial_state = vmap(initialization.sequential_init)(keys_init) # initial state for all chains on this device. keys_init.shape = (chains_per_device, )
-        Etheta = lax.psum(jnp.sum(initialization.summary_statistics(initial_state), axis= 0), 'chains') / num_chains # summary_statistics are averaged over all chains (across all devices). Etheta is now a couple of scalars.
-        initial_state = vmap(initialization.ensemble_init, (0, None))(initial_state, Etheta) # update the initial state, based on Etheta.
         
         initial_state_all = (initial_state, adaptation.initial_state)
         
         # run sampling
         xs = (jnp.arange(num_steps), keys_sampling.T, keys_adaptation) # keys for all steps that will be performed. keys_sampling.shape = (num_steps, chains_per_device), keys_adaptation.shape = (num_steps, )
         
-        final_state_all, info_history = lax.scan(one_step, initial_state_all, xs)
+        final_state_all, info_history = lax.scan(step, initial_state_all, xs)
         final_state, final_adaptation_state = final_state_all
         return final_state, final_adaptation_state, info_history # info history is composed of averages over all chains, so it is a couple of scalars
 
@@ -269,15 +256,64 @@ def run_eca(rng_key, kernel, initialization, adaptation, num_steps, num_chains, 
                             )
     
     # produce all random keys that will be needed
-    key_init, key_sampling, key_adaptation = split(rng_key, 3)
-    distribute_keys = lambda key, shape: device_put(split(key, shape), NamedSharding(mesh, p)) # random keys, distributed across devices
-    keys_init = distribute_keys(key_init, num_chains)
-    keys_sampling = distribute_keys(key_init, (num_chains, num_steps))
+    key_sampling, key_adaptation = split(rng_key)
     keys_adaptation = split(key_adaptation, num_steps)
+    distribute_keys = lambda key, shape: device_put(split(key, shape), NamedSharding(mesh, p)) # random keys, distributed across devices
+    keys_sampling = distribute_keys(key_sampling, (num_chains, num_steps))
 
     
     # run sampling in parallel
-    final_state, final_adaptation_state, info_history = parallel_execute(keys_init, keys_sampling, keys_adaptation)
+    final_state, final_adaptation_state, info_history = parallel_execute(initial_state, keys_sampling, keys_adaptation)
     
     return final_state, final_adaptation_state, info_history
+
+
+
+
+def ensemble_execute_fn(func, rng_key, num_chains, mesh, 
+                        x= None, 
+                        args= None,
+                        summary_statistics_fn= lambda y: 0.,
+    ):
+    """Given a sequential function 
+        func(rng_key, x, args) = y,
+       evaluate it with an ensemble and also compute some summary statistics E[theta(y)], where expectation is taken over ensemble.
+       Args:
+            x: array distributed over all decvices
+            args: additional arguments for func, not distributed.
+            summary_statistics_fn: operates on a single member of ensemble and returns some summary statistics.
+            rng_key: a single random key, which will then be split, such that each member of an ensemble will get a different random key. 
+        
+       Returns:
+            y: array distributed over all decvices. Need not be of the same shape as x.
+            Etheta: expected values of the summary statistics
+    """
+    p, pscalar = PartitionSpec('chains'), PartitionSpec()
+    
+    if x == None:
+        X= device_put(jnp.zeros(num_chains), NamedSharding(mesh, p)) # random keys, distributed across devices
+
+    else: 
+        X= x
+    
+    adaptation_update= lambda useless_param1, Etheta, useless_param2: (Etheta, None)
+    
+    _F = eca_step(func, lambda y, _: summary_statistics_fn(y), adaptation_update, num_chains)
+
+    def F(x, keys):
+        """This function operates on a single device. key is a random key for this device."""
+        y, summary_statistics = _F((x, args), (None, keys, None))[0]
+        return y, summary_statistics
+
+    parallel_execute = shard_map(F, 
+                            mesh= mesh,
+                            in_specs= (p, p), 
+                            out_specs= (p, pscalar),
+                            check_rep=False
+                            )
+    
+    keys = device_put(split(rng_key, num_chains), NamedSharding(mesh, p)) # random keys, distributed across devices
+    # apply F in parallel
+    return parallel_execute(X, keys)
+    
     
