@@ -164,12 +164,12 @@ class Adaptation:
                                              EEVPD=1e-3, EEVPD_wanted=1e-3)
         
         
-    def summary_statistics_fn(self, state, info):
+    def summary_statistics_fn(self, state, info, rng_key):
     
         position_flat, unravel_fn = ravel_pytree(state.position)
         
         return {'equipartition_diagonal': equipartition_diagonal(state), 
-                'equipartition_fullrank': equipartition_fullrank(state), 
+                'equipartition_fullrank': equipartition_fullrank(state, rng_key), 
                 'x': position_flat, 'xsq': jnp.square(position_flat), 
                 'E': info['energy_change'], 'Esq': jnp.square(info['energy_change']),
                 'rejection_rate_nans': info['nans'],
@@ -177,7 +177,7 @@ class Adaptation:
                 }
         
         
-    def update(self, adaptation_state, Etheta, key_adaptation):
+    def update(self, adaptation_state, Etheta):
         
         # combine the expectation values to get useful scalars
         equi_diag = equipartition_diagonal_loss(Etheta['equipartition_diagonal'])

@@ -82,16 +82,16 @@ class Adaptation:
         self.initial_state = AdaptationState(steps_per_sample, step_size, da_state)
         
         
-    def summary_statistics_fn(self, state, info):
+    def summary_statistics_fn(self, state, info, rng_key):
      
         return {'acceptance_probability': info.acceptance_rate,
                 'equipartition_diagonal': equipartition_diagonal(state), 
-                'equipartition_fullrank': equipartition_fullrank(state), 
+                'equipartition_fullrank': equipartition_fullrank(state, rng_key), 
                 'monitored_exp_vals': self.monitor_exp_vals(state.position)
                 }
         
         
-    def update(self, adaptation_state, Etheta, key_adaptation):
+    def update(self, adaptation_state, Etheta):
         
         # combine the expectation values to get useful scalars
         acc_prob = Etheta['acceptance_probability']
