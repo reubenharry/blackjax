@@ -16,11 +16,11 @@ from typing import Callable, NamedTuple
 import jax
 import jax.numpy as jnp
 import jax.random
-#import jaxopt
+import jaxopt
 from jax import lax
 from jax.flatten_util import ravel_pytree
-#from jaxopt._src.lbfgs import LbfgsState
-#from jaxopt.base import OptStep
+from jaxopt._src.lbfgs import LbfgsState
+from jaxopt.base import OptStep
 
 from blackjax.types import Array, ArrayLikeTree
 

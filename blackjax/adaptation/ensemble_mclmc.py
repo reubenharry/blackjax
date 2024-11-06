@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 
 from blackjax.util import run_eca
-from blackjax.mcmc.integrators import isokinetic_mclachlan, isokinetic_velocity_verlet
+from blackjax.mcmc.integrators import generate_isokinetic_integrator, velocity_verlet_coefficients, mclachlan_coefficients, omelyan_coefficients
 from blackjax.mcmc.hmc import HMCState
 from blackjax.mcmc.mhmclmc import build_kernel_malt
 import blackjax.adaptation.ensemble_umclmc as umclmc
@@ -36,10 +36,10 @@ class AdaptationState(NamedTuple):
     
 
 
-def build_kernel(logdensity_fn, integrator):
+def build_kernel(logdensity_fn, integrator, sqrt_diag_cov):
     """MCLMC kernel"""
     
-    kernel = build_kernel_malt(logdensity_fn, integrator)
+    kernel = build_kernel_malt(logdensity_fn, integrator, sqrt_diag_cov= sqrt_diag_cov)
     
     def sequential_kernel(key, state, adap):
         return kernel(key, state, step_size= adap.step_size, num_integration_steps= adap.steps_per_sample)
@@ -51,8 +51,7 @@ def build_kernel(logdensity_fn, integrator):
 class Adaptation:
     
     def __init__(self, adap_state, 
-                 num_dims, 
-                 mclachlan, steps_per_sample, acc_prob_target= 0.8,
+                 steps_per_sample, acc_prob_target= 0.8,
                  monitor_exp_vals= lambda x: 0., contract_exp_vals= lambda exp_vals: 0.):
         
         self.monitor_exp_vals = monitor_exp_vals
@@ -62,14 +61,13 @@ class Adaptation:
         
         ## stepsize ##
         #if we switched to the more accurate integrator we can use longer step size
-        integrator_factor = jnp.sqrt(10.) if mclachlan else 1. 
+        #integrator_factor = jnp.sqrt(10.) if mclachlan else 1. 
         # Let's use the stepsize which will be optimal for the adjusted method. The energy variance after N steps scales as sigma^2 ~ N^2 eps^6 = eps^4 L^2
         # In the adjusted method we want sigma^2 = 2 mu = 2 * 0.41 = 0.82
         # With the current eps, we had sigma^2 = EEVPD * d for N = 1. 
         # Combining the two we have EEVPD * d / 0.82 = eps^6 / eps_new^4 L^2
-        adjustment_factor = jnp.power(0.82 / (num_dims * adap_state.EEVPD), 0.25) / jnp.sqrt(steps_per_sample)
-        
-        step_size = adap_state.step_size * integrator_factor * adjustment_factor
+        #adjustment_factor = jnp.power(0.82 / (num_dims * adap_state.EEVPD), 0.25) / jnp.sqrt(steps_per_sample)
+        step_size = adap_state.step_size #* integrator_factor * adjustment_factor
 
         #steps_per_sample = (int)(jnp.max(jnp.array([Lfull / step_size, 1])))
                 
@@ -114,6 +112,7 @@ class Adaptation:
 
 
 def bias(model):
+    """should be transfered to benchmarks/"""
     
     def exp_vals(position):
         return jnp.square(model.transform(position))
@@ -127,7 +126,14 @@ def bias(model):
 
 
 def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
-          mclachlan= True, steps_per_sample= 10, acc_prob_target= 0.8):
+          early_stop= True,
+          integrator_coefficients= omelyan_coefficients, 
+          steps_per_sample= 10, 
+          acc_prob= 0.8, 
+          diagonal_preconditioning= True, 
+          equi_full= False, 
+          save_frac= 0.2
+          ):
     
     exp_vals, contract = bias(model)
     key_init, key_umclmc, key_mclmc = jax.random.split(rng_key, 3)
@@ -137,17 +143,29 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     
     ### burn-in with the unadjusted method ###
     kernel = umclmc.build_kernel(model.logdensity_fn)
-    adap = umclmc.Adaptation(model.ndims, monitor_exp_vals= exp_vals, contract_exp_vals= contract)
+    save_num= (int)(jnp.rint(save_frac * num_steps1))
+    adap = umclmc.Adaptation(model.ndims, equi_full= equi_full, save_num= save_num, monitor_exp_vals= exp_vals, contract_exp_vals= contract)
     final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps1, num_chains, mesh)
     
-    
-    ### refine the results with the adjusted method ###
-    integrator, gradient_calls_per_step = (isokinetic_mclachlan, 2) if mclachlan else (isokinetic_velocity_verlet, 1)
-    kernel = build_kernel(model.logdensity_fn, integrator)
-    initial_state= HMCState(final_state.position, final_state.logdensity, final_state.logdensity_grad)    
+    if early_stop: # here I am cheating a bit, because I am not sure if it is possible to do a while loop in jax and save something at every step. Therefore I rerun burn-in with exactly the same parameters and stop at the point where the orignal while loop would have stopped. The release implementation should not have that.
+        num_steps_while = jnp.argmin(info1['while_cond']) + 1
+        print(num_steps_while, save_num) 
+        final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps_while, num_chains, mesh)
 
-    adap = Adaptation(final_adaptation_state, model.ndims, 
-                      mclachlan, steps_per_sample, acc_prob_target, 
+    ### refine the results with the adjusted method ###
+    integrator = generate_isokinetic_integrator(integrator_coefficients)
+    gradient_calls_per_step= len(integrator_coefficients) // 2
+    
+    if diagonal_preconditioning:
+        sqrt_diag_cov= final_adaptation_state.sqrt_diag_cov
+        # reduce stepsize?
+    else:
+        sqrt_diag_cov= 1.
+    
+    kernel = build_kernel(model.logdensity_fn, integrator, sqrt_diag_cov= sqrt_diag_cov)
+    initial_state= HMCState(final_state.position, final_state.logdensity, final_state.logdensity_grad)
+
+    adap = Adaptation(final_adaptation_state, steps_per_sample, acc_prob, 
                       monitor_exp_vals= exp_vals, contract_exp_vals= contract)
     
     num_samples = num_steps2 // (gradient_calls_per_step * steps_per_sample)

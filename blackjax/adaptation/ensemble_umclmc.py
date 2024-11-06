@@ -95,13 +95,13 @@ def initialize(rng_key, logdensity_fn, sample_init, num_chains, mesh):
 class AdaptationState(NamedTuple):
     
     L: float
+    sqrt_diag_cov: Any
     step_size: float
     
     steps: int
     EEVPD: float
     EEVPD_wanted: float
-    #history: Array
-    
+    history: Array    
     
 
 def equipartition_diagonal(state):
@@ -140,8 +140,9 @@ def equipartition_fullrank_loss(delta_z):
 
 class Adaptation:
     
-    def __init__(self, num_dims, 
+    def __init__(self, num_dims,
                  alpha= 1., C= 0.1, 
+                 equi_full= False, save_num = 10,
                  monitor_exp_vals= lambda x: 0., contract_exp_vals= lambda exp_vals: 0.
                  ):
 
@@ -150,18 +151,18 @@ class Adaptation:
         self.C = C
         self.monitor_exp_vals = monitor_exp_vals
         self.contract_exp_vals = contract_exp_vals
-
-        #delay_num = (int)(jnp.rint(delay_frac * num_steps))    
+        self.use_equi_full = equi_full
+        
         #sigma = unravel_fn(jnp.ones(flat_pytree.shape, dtype = flat_pytree.dtype))
         
-        
-        #history = jnp.inf * jnp.ones(delay_num)
-        #history = jnp.concatenate((jnp.ones(1) * 1e50, jnp.ones(delay_num-1) * jnp.inf)) # loss history
+        history = jnp.full(save_num, jnp.nan) # loss history
         
         self.initial_state = AdaptationState(L= jnp.inf, # do not add noise for the first step
+                                             sqrt_diag_cov= jnp.ones(num_dims),
                                              step_size= 0.01 * jnp.sqrt(num_dims),
                                              steps= 0, 
-                                             EEVPD=1e-3, EEVPD_wanted=1e-3)
+                                             EEVPD=1e-3, EEVPD_wanted=1e-3,
+                                             history=history)
         
         
     def summary_statistics_fn(self, state, info, rng_key):
@@ -184,13 +185,15 @@ class Adaptation:
         equi_full = equipartition_fullrank_loss(Etheta['equipartition_fullrank'])
         
         L = self.alpha * jnp.sqrt(jnp.sum(Etheta['xsq'] - jnp.square(Etheta['x']))) # average over the ensemble, sum over parameters (to get sqrt(d))
+        sqrt_diag_cov = jnp.sqrt(Etheta['xsq'] - jnp.square(Etheta['x']))
+        
         EEVPD = (Etheta['Esq'] - jnp.square(Etheta['E'])) / self.num_dims
         nans = Etheta['rejection_rate_nans'] > 0
         contracted_exp_vals = self.contract_exp_vals(Etheta['monitored_exp_vals'])
         
 
         # hyperparameter adaptation                                              
-        bias = equi_diag #estimate the bias from the equipartition loss
+        bias = self.use_equi_full * equi_full + (1-self.use_equi_full) * equi_diag #estimate the bias from the equipartition loss
         EEVPD_wanted = self.C * jnp.power(bias, 3./8.)
         
         eps_factor = jnp.power(EEVPD_wanted / EEVPD, 1./6.)
@@ -198,20 +201,22 @@ class Adaptation:
         eps_factor = jnp.clip(eps_factor, 0.3, 3.)
         
         # determine if we want to finish this stage (= if loss is no longer decreassing)
-        #history = jnp.concatenate((jnp.ones(1) * bias, adap_state.history[:-1]))
-        #decreasing = (history[-1] > history[0]) or (adap_state.steps < adap_state.history.shape[0])
-        #cond = decreasing and (adap_state.steps < max_iter)
-        #cond = (adap_state.steps < max_iter)
-
+        history = jnp.concatenate((jnp.ones(1) * bias, adaptation_state.history[:-1]))
+        increasing = history[0] > history[-1] # will be false if some elements of history are still nan (have not been filled yet). Do not be tempted to simply change to while_cond = history[0] < history[-1]
+        while_cond = ~increasing
+        
         info_to_be_stored = {'L': adaptation_state.L, 'step_size': adaptation_state.step_size, 
                              'EEVPD_wanted': EEVPD_wanted, 'EEVPD': EEVPD, 
-                             'equi_diag': equi_diag, 'equi_full': equi_full, 'contracted_exp_vals': contracted_exp_vals}
+                             'equi_diag': equi_diag, 'equi_full': equi_full, 'contracted_exp_vals': contracted_exp_vals,
+                             'while_cond': while_cond}
     
         adaptation_state_new = AdaptationState(L, 
+                                               sqrt_diag_cov,
                                                adaptation_state.step_size * eps_factor, 
                                                adaptation_state.steps + 1, 
                                                EEVPD, 
-                                               EEVPD_wanted)
+                                               EEVPD_wanted,
+                                               history)
         
         return adaptation_state_new, info_to_be_stored
     
