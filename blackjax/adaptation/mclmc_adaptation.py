@@ -51,6 +51,7 @@ def mclmc_find_L_and_step_size(
     trust_in_estimate=1.5,
     num_effective_samples=150,
     diagonal_preconditioning=True,
+    num_windows=1,
 ):
     """
     Finds the optimal value of the parameters for the MCLMC algorithm.
@@ -108,16 +109,18 @@ def mclmc_find_L_and_step_size(
     )
     part1_key, part2_key = jax.random.split(rng_key, 2)
 
-    state, params = make_L_step_size_adaptation(
-        kernel=mclmc_kernel,
-        dim=dim,
-        frac_tune1=frac_tune1,
-        frac_tune2=frac_tune2,
-        desired_energy_var=desired_energy_var,
-        trust_in_estimate=trust_in_estimate,
-        num_effective_samples=num_effective_samples,
-        diagonal_preconditioning=diagonal_preconditioning,
-    )(state, params, num_steps, part1_key)
+    for i in range(num_windows):
+        window_key = jax.random.fold_in(part1_key, i)
+        state, params = make_L_step_size_adaptation(
+            kernel=mclmc_kernel,
+            dim=dim,
+            frac_tune1=frac_tune1,
+            frac_tune2=frac_tune2,
+            desired_energy_var=desired_energy_var,
+            trust_in_estimate=trust_in_estimate,
+            num_effective_samples=num_effective_samples,
+            diagonal_preconditioning=diagonal_preconditioning,
+        )(state, params, num_steps, window_key)
 
     if frac_tune3 != 0:
         state, params = make_adaptation_L(

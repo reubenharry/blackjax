@@ -85,8 +85,8 @@ def adjusted_mclmc_find_L_and_step_size(
 
     part1_key, part2_key = jax.random.split(rng_key, 2)
 
-    for _ in range(num_windows):
-        part1_key = jax.random.split(part1_key)[0]
+    for i in range(num_windows):
+        window_key = jax.random.fold_in(part1_key, i)
         (
             state,
             params,
@@ -101,7 +101,7 @@ def adjusted_mclmc_find_L_and_step_size(
             diagonal_preconditioning=diagonal_preconditioning,
             max=max,
         )(
-            state, params, num_steps, part1_key
+            state, params, num_steps, window_key
         )
     # jax.debug.print("params after stage 2 {x}", x=params)
 
