@@ -438,7 +438,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             if max:
                 contract = lambda x: jnp.max(x)*dim
             else:
-                contract = jnp.sum
+                contract = lambda x: jnp.sum(x)*1.3
 
             change = jax.lax.clamp(
                 Lratio_lowerbound,
