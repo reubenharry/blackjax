@@ -292,7 +292,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             update_da=update_da,
         )
 
-        jax.debug.print("state history {x}", x=state_history.position.shape)
+        # jax.debug.print("state history {x}", x=state_history.position.shape)
 
 
         final_stepsize = final_da(dual_avg_state)
