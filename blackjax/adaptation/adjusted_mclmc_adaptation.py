@@ -43,6 +43,7 @@ def adjusted_mclmc_find_L_and_step_size(
     params=None,
     max=False,
     num_windows=1,
+    tuning_factor=1.0
 ):
     """
     Finds the optimal value of the parameters for the MH-MCHMC algorithm.
@@ -90,8 +91,7 @@ def adjusted_mclmc_find_L_and_step_size(
         (
             state,
             params,
-            params_history,
-            final_da_val,
+            
         ) = adjusted_mclmc_make_L_step_size_adaptation(
             kernel=mclmc_kernel,
             dim=dim,
@@ -100,6 +100,7 @@ def adjusted_mclmc_find_L_and_step_size(
             target=target,
             diagonal_preconditioning=diagonal_preconditioning,
             max=max,
+            tuning_factor=tuning_factor
         )(
             state, params, num_steps, window_key
         )
@@ -116,8 +117,7 @@ def adjusted_mclmc_find_L_and_step_size(
         (
             state,
             params,
-            params_history,
-            final_da_val,
+            
         ) = adjusted_mclmc_make_L_step_size_adaptation(
             kernel=mclmc_kernel,
             dim=dim,
@@ -127,6 +127,7 @@ def adjusted_mclmc_find_L_and_step_size(
             fix_L_first_da=True,
             diagonal_preconditioning=diagonal_preconditioning,
             max=max,
+            tuning_factor=tuning_factor
         )(
             state, params, num_steps, part2_key2
         )
@@ -135,7 +136,7 @@ def adjusted_mclmc_find_L_and_step_size(
         # jax.debug.print("params after stage 1 (again) {x}", x=params)
         
 
-    return state, params, params_history, final_da_val
+    return state, params
 
 
 def adjusted_mclmc_make_L_step_size_adaptation(
@@ -147,6 +148,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
     diagonal_preconditioning,
     fix_L_first_da=False,
     max=False,
+    tuning_factor=1.0
 ):
     """Adapts the stepsize and L of the MCLMC kernel. Designed for the unadjusted MCLMC"""
 
@@ -239,7 +241,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                 previous_weight_and_average,
             ), (
                 info,
-                params,
+                None,
             )
 
         return step
@@ -256,78 +258,6 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             xs=(mask, keys),
         )
     
-    def adam_step(loss_fn, optimizer, opt_state, previous_state, params, fix_L, rng_key):
-        # use optax to vary stepsize, to minimize the difference between the acceptance rate and the target acceptance rate
-
-
-        # loss_fn(step_size=params.step_size, state=previous_state, key=rng_key)
-        
-        # grads = jax.grad(loss_fn)(params.step_size, previous_state, rng_key)
-
-        # jax.debug.print("loss {x}", x=(loss_fn(params, state, keys[0])))
-
-
-        # todo: should i use different key here? seems slightly subtle
-        new_state, info = kernel(
-            rng_key=rng_key,
-            state=previous_state,
-            step_size=params.step_size,
-            avg_num_integration_steps=params.L / params.step_size,
-            sqrt_diag_cov=params.sqrt_diag_cov,
-        )
-
-        grads = target - info.acceptance_rate
-        updates, opt_state = optimizer.update(grads, opt_state)
-        new_step_size = optax.apply_updates(params.step_size, updates)
-
-        # jax.debug.print("stepsize {x}", x=(params.step_size,new_step_size))
-        # new_step_size = params.step_size
-
-        mask = 1.0
-
-        if fix_L:
-                params = params._replace(
-                    step_size=mask*new_step_size + (1 - mask) * params.step_size,
-                )
-
-        else:
-            params = params._replace(
-                step_size=mask * new_step_size + (1 - mask) * params.step_size,
-                L=mask * (params.L * (new_step_size / params.step_size))
-                + (1 - mask) * params.L,
-            )
-
-        # jax.debug.print("stepsize after {x}", x=(params.step_size, new_step_size))
-
-        return (params, new_state, opt_state), info
-
-
-    
-    def adam_adaptation(state, params, target_acceptance_rate, fix_L, keys):
-
-        start_learning_rate = 1e-1
-        optimizer = optax.adam(learning_rate=start_learning_rate)
-        opt_state = optimizer.init(params.step_size)
-
-        # def loss_fn(step_size, state, key):
-            # return 5.0
-            # _, info = kernel(
-            #         rng_key=key,
-            #         state=state,
-            #         step_size=step_size,
-            #         avg_num_integration_steps=params.L / step_size,
-            #         sqrt_diag_cov=params.sqrt_diag_cov,
-            #     )
-            
-            # return jnp.square(info.acceptance_rate.mean() - target_acceptance_rate)
-        
-        # adam_step(loss_fn, optimizer, opt_state, state, params, fix_L, keys[0])
-    
-        return jax.lax.scan(
-            lambda vars, key: adam_step(loss_fn=None, optimizer=optimizer, fix_L=fix_L, rng_key=key, opt_state=vars[2], previous_state=vars[1], params=vars[0]),
-            (params, state, opt_state),
-            keys
-        )
 
         
 
@@ -351,7 +281,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
         (
             (state, params, (dual_avg_state, step_size_max), (_, average)),
-            (info, params_history),
+            (info, _),
         ) = step_size_adaptation(
             mask,
             state,
@@ -362,71 +292,12 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             update_da=update_da,
         )
 
+        jax.debug.print("state history {x}", x=state_history.position.shape)
+
 
         final_stepsize = final_da(dual_avg_state)
         params = params._replace(step_size=final_stepsize)
 
-        # jax.debug.print("stepsize {x}", x=params.step_size)
-        # jax.debug.print("L {x}", x=params.L)
-        # jax.debug.print("info {x}", x=info.acceptance_rate.mean())
-
-        # L_step_size_adaptation_keys_pass1 = jax.random.split(check_key, num_steps1)
-        # mask = jnp.zeros(num_steps1)
-
-        # (
-        #     (state, params, (dual_avg_state, step_size_max), (_, average)),
-        #     (info, params_history),
-        # ) = step_size_adaptation(
-        #     mask,
-        #     state,
-        #     params,
-        #     L_step_size_adaptation_keys_pass1,
-        #     fix_L=fix_L_first_da,
-        #     initial_da=initial_da,
-        #     update_da=update_da,
-        # )
-
-        # keys = jax.random.split(check_key, 1000)
-        # (params,state,opt_state), info = adam_adaptation(state, params, target, fix_L_first_da, keys)
-        # jax.debug.print("stepsize {x}", x=params.step_size)
-        # # raise Exception
-
-        # keys = jax.random.split(check_key, 1000)
-        # _, info = jax.lax.scan(
-        #     lambda state, key: kernel(
-        #         rng_key=key,
-        #         state=state,
-        #         # step_size=params.step_size,
-        #         step_size=final_stepsize,
-        #         avg_num_integration_steps=params.L / params.step_size,
-        #         sqrt_diag_cov=params.sqrt_diag_cov,
-        #     ),
-        #     state,
-        #     keys
-        # )
-
-        # jax.debug.print("pst run {x}", x=info.acceptance_rate.mean())
-        # jax.debug.print("cov {x}", x=params.sqrt_diag_cov)
-        # raise Exception
-
-        # num_steps_per_traj = params.L / params.step_size
-        # alg = blackjax.adjusted_mclmc(
-        #     logdensity_fn=lambda x : -0.5 * jnp.sum(jnp.square(x), axis= -1),
-        #     step_size=params.step_size,
-        #     integration_steps_fn=lambda k: jnp.ceil(jax.random.uniform(k) * rescale(num_steps_per_traj)),
-        #     integrator= isokinetic_mclachlan,
-        #     sqrt_diag_cov=1.0,
-        #     L_proposal_factor=jnp.inf,
-        # )
-        # _, (_, info) = run_inference_algorithm(
-        #     rng_key=jax.random.PRNGKey(0),
-        #     inference_algorithm=alg,
-        #     initial_state=state,
-        #     num_steps=2000 
-        # )
-
-        # jax.debug.print("pst run {x}", x=info.acceptance_rate.mean())
-        # raise Exception
 
 
 
@@ -438,7 +309,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             if max:
                 contract = lambda x: jnp.max(x)*dim
             else:
-                contract = lambda x: jnp.sum(x)*1.3
+                contract = lambda x: jnp.sum(x)*tuning_factor
 
             change = jax.lax.clamp(
                 Lratio_lowerbound,
@@ -487,7 +358,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             # jax.debug.print("pst run {x}", x=info.acceptance_rate.mean())
             # jax.debug.print("stepsize and L {x}", x=(params.step_size, params.L))
 
-        return state, params, params_history.step_size, final_da(dual_avg_state)
+        return state, params
 
     return L_step_size_adaptation
 
