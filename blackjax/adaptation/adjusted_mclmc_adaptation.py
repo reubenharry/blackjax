@@ -307,13 +307,13 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             variances = x_squared_average - jnp.square(x_average)
 
             if max:
-                contract = lambda x: jnp.max(x)*dim
+                contract = lambda x: jnp.sqrt(jnp.max(x)*dim)
             else:
-                contract = lambda x: jnp.sum(x)*tuning_factor
+                contract = lambda x: jnp.sqrt(jnp.sum(x))*tuning_factor
 
             change = jax.lax.clamp(
                 Lratio_lowerbound,
-                jnp.sqrt(contract(variances)) / params.L,
+                contract(variances) / params.L,
                 Lratio_upperbound,
             )
             params = params._replace(
