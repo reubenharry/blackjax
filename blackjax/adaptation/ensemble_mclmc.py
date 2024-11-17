@@ -52,10 +52,10 @@ class Adaptation:
     
     def __init__(self, adap_state, 
                  steps_per_sample, acc_prob_target= 0.8,
-                 monitor_exp_vals= lambda x: 0., contract_exp_vals= lambda exp_vals: 0.):
+                 observables= lambda x: 0., contract= lambda x: 0.):
         
-        self.monitor_exp_vals = monitor_exp_vals
-        self.contract_exp_vals = contract_exp_vals
+        self.observables = observables
+        self.contract = contract
         
         ### Determine the initial hyperparameters ###
         
@@ -85,7 +85,7 @@ class Adaptation:
         return {'acceptance_probability': info.acceptance_rate,
                 'equipartition_diagonal': equipartition_diagonal(state), 
                 'equipartition_fullrank': equipartition_fullrank(state, rng_key), 
-                'monitored_exp_vals': self.monitor_exp_vals(state.position)
+                'observables': self.observables(state.position)
                 }
         
         
@@ -95,12 +95,12 @@ class Adaptation:
         acc_prob = Etheta['acceptance_probability']
         equi_diag = equipartition_diagonal_loss(Etheta['equipartition_diagonal'])
         equi_full = equipartition_fullrank_loss(Etheta['equipartition_fullrank'])
-        contracted_exp_vals = self.contract_exp_vals(Etheta['monitored_exp_vals'])
+        true_bias = self.contract(Etheta['observables'])
         
         
         info_to_be_stored = {'L': adaptation_state.step_size * adaptation_state.steps_per_sample, 'steps_per_sample': adaptation_state.steps_per_sample, 'step_size': adaptation_state.step_size, 
                              'acc_prob': acc_prob,
-                             'equi_diag': equi_diag, 'equi_full': equi_full, 'contracted_exp_vals': contracted_exp_vals}
+                             'equi_diag': equi_diag, 'equi_full': equi_full, 'bias': true_bias}
 
 
         # hyperparameter adaptation                                              
@@ -114,28 +114,30 @@ class Adaptation:
 def bias(model):
     """should be transfered to benchmarks/"""
     
-    def exp_vals(position):
+    def observables(position):
         return jnp.square(model.transform(position))
     
     def contract(sampler_E_x2):
         bsq = jnp.square(sampler_E_x2 - model.E_x2) / model.Var_x2
         return jnp.array([jnp.max(bsq), jnp.average(bsq)])
     
-    return exp_vals, contract
+    return observables, contract
 
+
+
+def while_steps_num(cond):
+    if jnp.all(cond):
+        return len(cond)
+    else:
+        return jnp.argmin(cond) + 1
 
 
 def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
-          early_stop= True,
-          integrator_coefficients= omelyan_coefficients, 
-          steps_per_sample= 10, 
-          acc_prob= 0.8, 
-          diagonal_preconditioning= True, 
-          equi_full= False, 
-          save_frac= 0.2
+          alpha= 1., bias_type= 0, save_frac= 0.2, C= 0.1, power= 3./8., early_stop= True,# stage1 parameters
+          diagonal_preconditioning= True, integrator_coefficients= omelyan_coefficients, steps_per_sample= 10, acc_prob= 0.8, 
           ):
     
-    exp_vals, contract = bias(model)
+    observables, contract = bias(model)
     key_init, key_umclmc, key_mclmc = jax.random.split(rng_key, 3)
     
     # initialize the chains
@@ -144,12 +146,13 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     ### burn-in with the unadjusted method ###
     kernel = umclmc.build_kernel(model.logdensity_fn)
     save_num= (int)(jnp.rint(save_frac * num_steps1))
-    adap = umclmc.Adaptation(model.ndims, equi_full= equi_full, save_num= save_num, monitor_exp_vals= exp_vals, contract_exp_vals= contract)
+    adap = umclmc.Adaptation(model.ndims, alpha= alpha, bias_type= bias_type, save_num= save_num, C=C, power= power,
+                             observables= observables, contract= contract)
     final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps1, num_chains, mesh)
     
     if early_stop: # here I am cheating a bit, because I am not sure if it is possible to do a while loop in jax and save something at every step. Therefore I rerun burn-in with exactly the same parameters and stop at the point where the orignal while loop would have stopped. The release implementation should not have that.
-        num_steps_while = jnp.argmin(info1['while_cond']) + 1
-        print(num_steps_while, save_num) 
+        num_steps_while = while_steps_num(info1['while_cond'])
+        print(num_steps_while, save_num)
         final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps_while, num_chains, mesh)
 
     ### refine the results with the adjusted method ###
@@ -158,7 +161,11 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     
     if diagonal_preconditioning:
         sqrt_diag_cov= final_adaptation_state.sqrt_diag_cov
-        # reduce stepsize?
+        
+        # scale the stepsize so that it reflects averag scale change of the preconditioning
+        average_scale_change = jnp.sqrt(jnp.average(jnp.square(sqrt_diag_cov)))
+        final_adaptation_state = final_adaptation_state._replace(stepsize= final_adaptation_state.stepsize / average_scale_change)
+
     else:
         sqrt_diag_cov= 1.
     
@@ -166,7 +173,7 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     initial_state= HMCState(final_state.position, final_state.logdensity, final_state.logdensity_grad)
 
     adap = Adaptation(final_adaptation_state, steps_per_sample, acc_prob, 
-                      monitor_exp_vals= exp_vals, contract_exp_vals= contract)
+                      observables= observables, contract= contract)
     
     num_samples = num_steps2 // (gradient_calls_per_step * steps_per_sample)
     final_state, final_adaptation_state, info2 = run_eca(key_mclmc, initial_state, kernel, adap, num_samples, num_chains, mesh)

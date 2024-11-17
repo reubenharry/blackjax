@@ -53,7 +53,7 @@ def build_kernel(logdensity_fn):
         nonans = no_nans(new_state)
         new_state = nan_reject(nonans, state, new_state)
         
-        return new_state, {'nans': 1-nonans, 'energy_change': info.energy_change * nonans}
+        return new_state, {'nans': 1-nonans, 'energy_change': info.energy_change * nonans, 'logdensity': info.logdensity * nonans}
 
     
     return sequential_kernel
@@ -85,12 +85,35 @@ def initialize(rng_key, logdensity_fn, sample_init, num_chains, mesh):
 
     key1, key2= jax.random.split(rng_key)    
     initial_state, equipartition = ensemble_execute_fn(sequential_init, key1, num_chains, mesh, summary_statistics_fn= summary_statistics_fn)
-    signs= -2. * (equipartition < 1.) + 1.    
+    signs = -2. * (equipartition < 1.) + 1.    
     initial_state, _ = ensemble_execute_fn(ensemble_init, key2, num_chains, mesh, x= initial_state, args= signs)
     
     return initial_state
     
     
+def update_history(new_vals, history):
+    return jnp.concatenate((new_vals[None, :], history[:-1]))
+
+def update_history_scalar(new_val, history):
+    return jnp.concatenate((new_val * jnp.ones(1), history[:-1]))
+
+def contract_history(theta, weights):
+  
+    square_average = jnp.square(jnp.average(theta, weights= weights, axis= 0))
+    average_square = jnp.average(jnp.square(theta), weights= weights, axis= 0)
+      
+    r = (average_square - square_average) / square_average
+    
+    return jnp.array([jnp.max(r), 
+                      jnp.average(r)
+                      ])
+
+
+class History(NamedTuple):
+    observables: Array
+    stopping: Array
+    weights: Array
+
 
 class AdaptationState(NamedTuple):
     
@@ -101,7 +124,7 @@ class AdaptationState(NamedTuple):
     steps: int
     EEVPD: float
     EEVPD_wanted: float
-    history: Array    
+    history: Any    
     
 
 def equipartition_diagonal(state):
@@ -141,22 +164,27 @@ def equipartition_fullrank_loss(delta_z):
 class Adaptation:
     
     def __init__(self, num_dims,
-                 alpha= 1., C= 0.1, 
-                 equi_full= False, save_num = 10,
-                 monitor_exp_vals= lambda x: 0., contract_exp_vals= lambda exp_vals: 0.
+                 alpha= 1., C= 0.1, power = 3./8.,
+                 bias_type= 0, save_num = 10,
+                 observables= lambda x: 0., contract= lambda x: 0.
                  ):
 
         self.num_dims = num_dims
         self.alpha = alpha
         self.C = C
-        self.monitor_exp_vals = monitor_exp_vals
-        self.contract_exp_vals = contract_exp_vals
-        self.use_equi_full = equi_full
-        
+        self.power = power
+        self.observables = observables
+        self.contract = contract
+        self.bias_type = bias_type
+        self.save_num = save_num
         #sigma = unravel_fn(jnp.ones(flat_pytree.shape, dtype = flat_pytree.dtype))
         
-        history = jnp.full(save_num, jnp.nan) # loss history
+        r_save_num = save_num
         
+        history = History(observables= jnp.zeros((r_save_num, num_dims)), 
+                          stopping= jnp.full((save_num,), jnp.nan), 
+                          weights= jnp.zeros(r_save_num))
+
         self.initial_state = AdaptationState(L= jnp.inf, # do not add noise for the first step
                                              sqrt_diag_cov= jnp.ones(num_dims),
                                              step_size= 0.01 * jnp.sqrt(num_dims),
@@ -174,41 +202,51 @@ class Adaptation:
                 'x': position_flat, 'xsq': jnp.square(position_flat), 
                 'E': info['energy_change'], 'Esq': jnp.square(info['energy_change']),
                 'rejection_rate_nans': info['nans'],
-                'monitored_exp_vals': self.monitor_exp_vals(state.position)
+                'observables': self.observables(state.position),
+                'entropy': - info['logdensity']
                 }
         
-        
+    
     def update(self, adaptation_state, Etheta):
         
         # combine the expectation values to get useful scalars
         equi_diag = equipartition_diagonal_loss(Etheta['equipartition_diagonal'])
         equi_full = equipartition_fullrank_loss(Etheta['equipartition_fullrank'])
         
+        history_observables = update_history(Etheta['observables'], adaptation_state.history.observables)        
+        history_weights = update_history_scalar(1., adaptation_state.history.weights)
+        fluctuations = contract_history(history_observables, history_weights)
+        history_stopping = update_history_scalar(jax.lax.cond(adaptation_state.steps > len(history_weights), lambda _: fluctuations[0], lambda _: jnp.nan, operand=None), 
+                                                 adaptation_state.history.stopping)
+        history = History(history_observables, history_stopping, history_weights)
+        
         L = self.alpha * jnp.sqrt(jnp.sum(Etheta['xsq'] - jnp.square(Etheta['x']))) # average over the ensemble, sum over parameters (to get sqrt(d))
         sqrt_diag_cov = jnp.sqrt(Etheta['xsq'] - jnp.square(Etheta['x']))
-        
-        EEVPD = (Etheta['Esq'] - jnp.square(Etheta['E'])) / self.num_dims
-        nans = Etheta['rejection_rate_nans'] > 0
-        contracted_exp_vals = self.contract_exp_vals(Etheta['monitored_exp_vals'])
+        EEVPD = (Etheta['Esq'] - jnp.square(Etheta['E'])) / self.num_dims        
+        true_bias = self.contract(Etheta['observables'])
+        nans = (Etheta['rejection_rate_nans'] > 0.) #| (~jnp.isfinite(eps_factor))
+
+        # hyperparameter adaptation
+        # estimate bias
+        bias = jnp.array([fluctuations[0], fluctuations[1], equi_full, equi_diag])[self.bias_type] # r_max, r_avg, equi_full, equi_diag
+        EEVPD_wanted = self.C * jnp.power(bias, self.power)
         
 
-        # hyperparameter adaptation                                              
-        bias = self.use_equi_full * equi_full + (1-self.use_equi_full) * equi_diag #estimate the bias from the equipartition loss
-        EEVPD_wanted = self.C * jnp.power(bias, 3./8.)
-        
         eps_factor = jnp.power(EEVPD_wanted / EEVPD, 1./6.)
-        eps_factor = nans * 0.5 + (1-nans) * eps_factor # reduce the stepsize if there were nans
         eps_factor = jnp.clip(eps_factor, 0.3, 3.)
         
-        # determine if we want to finish this stage (= if loss is no longer decreassing)
-        history = jnp.concatenate((jnp.ones(1) * bias, adaptation_state.history[:-1]))
-        increasing = history[0] > history[-1] # will be false if some elements of history are still nan (have not been filled yet). Do not be tempted to simply change to while_cond = history[0] < history[-1]
-        while_cond = ~increasing
+        eps_factor = nan_reject(1-nans, 0.5, eps_factor) # reduce the stepsize if there were nans
+
+        # determine if we want to finish this stage (i.e. if loss is no longer decreassing)
+        #increasing = history.stopping[0] > history.stopping[-1] # will be false if some elements of history are still nan (have not been filled yet). Do not be tempted to simply change to while_cond = history[0] < history[-1]
+        #while_cond = ~increasing
+        while_cond = (fluctuations[0] > 5e-3) | (adaptation_state.steps < self.save_num)
         
         info_to_be_stored = {'L': adaptation_state.L, 'step_size': adaptation_state.step_size, 
                              'EEVPD_wanted': EEVPD_wanted, 'EEVPD': EEVPD, 
-                             'equi_diag': equi_diag, 'equi_full': equi_full, 'contracted_exp_vals': contracted_exp_vals,
-                             'while_cond': while_cond}
+                             'equi_diag': equi_diag, 'equi_full': equi_full, 'bias': true_bias,
+                             'r_max': fluctuations[0], 'r_avg': fluctuations[1],
+                             'while_cond': while_cond, 'entropy': Etheta['entropy']}
     
         adaptation_state_new = AdaptationState(L, 
                                                sqrt_diag_cov,

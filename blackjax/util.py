@@ -291,8 +291,7 @@ def ensemble_execute_fn(func, rng_key, num_chains, mesh,
     p, pscalar = PartitionSpec('chains'), PartitionSpec()
     
     if x == None:
-        X= device_put(jnp.zeros(num_chains), NamedSharding(mesh, p)) # random keys, distributed across devices
-
+        X= device_put(jnp.zeros(num_chains), NamedSharding(mesh, p))
     else: 
         X= x
     

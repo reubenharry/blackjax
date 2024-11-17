@@ -68,6 +68,7 @@ class PathFinderAlgorithm(NamedTuple):
     sample: Callable
 
 
+
 def approximate(
     rng_key: PRNGKey,
     logdensity_fn: Callable,
@@ -137,7 +138,7 @@ def approximate(
         maxls,
         **lbfgs_kwargs,
     )
-
+    
     # Get postions and gradients of the optimization path (including the starting point).
     position = history.x
     grad_position = history.g
