@@ -33,6 +33,7 @@ class AdaptationState(NamedTuple):
     steps_per_sample: float
     step_size: float
     da_state: Any
+    sample_count: int
     
 
 
@@ -50,10 +51,11 @@ def build_kernel(logdensity_fn, integrator, sqrt_diag_cov):
 
 class Adaptation:
     
-    def __init__(self, adap_state, 
+    def __init__(self, adap_state, num_adaptation_samples,
                  steps_per_sample, acc_prob_target= 0.8,
                  observables= lambda x: 0., contract= lambda x: 0.):
         
+        self.num_adaptation_samples= num_adaptation_samples
         self.observables = observables
         self.contract = contract
         
@@ -77,7 +79,7 @@ class Adaptation:
         
         da_state = da_init(step_size)
         
-        self.initial_state = AdaptationState(steps_per_sample, step_size, da_state)
+        self.initial_state = AdaptationState(steps_per_sample, step_size, da_state, 0)
         
         
     def summary_statistics_fn(self, state, info, rng_key):
@@ -103,11 +105,20 @@ class Adaptation:
                              'equi_diag': equi_diag, 'equi_full': equi_full, 'bias': true_bias}
 
 
-        # hyperparameter adaptation                                              
-        da_state = self.da_update(adaptation_state.da_state, acc_prob)
-        step_size = jnp.exp(da_state.log_step_size)
+        # hyperparameter adaptation
+        adaptation_phase = adaptation_state.sample_count < self.num_adaptation_samples  
         
-        return AdaptationState(adaptation_state.steps_per_sample, step_size, da_state), info_to_be_stored
+        def update(_):
+            da_state = self.da_update(adaptation_state.da_state, acc_prob)
+            step_size = jnp.exp(da_state.log_step_size)
+            return da_state, step_size
+        def dont_update(_):
+            da_state = adaptation_state.da_state
+            return da_state, jnp.exp(da_state.log_step_size_avg)
+        
+        da_state, step_size = jax.lax.cond(adaptation_phase, update, dont_update, operand=None)
+        
+        return AdaptationState(adaptation_state.steps_per_sample, step_size, da_state, adaptation_state.sample_count + 1), info_to_be_stored
 
 
 
@@ -133,8 +144,8 @@ def while_steps_num(cond):
 
 
 def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
-          alpha= 1., bias_type= 0, save_frac= 0.2, C= 0.1, power= 3./8., early_stop= True,# stage1 parameters
-          diagonal_preconditioning= True, integrator_coefficients= omelyan_coefficients, steps_per_sample= 10, acc_prob= 0.8, 
+          alpha= 1., bias_type= 0, save_frac= 0.2, C= 0.1, power= 3./8., early_stop= True, r_end= 1e-2,# stage1 parameters
+          diagonal_preconditioning= True, integrator_coefficients= None, steps_per_sample= 10, acc_prob= None, 
           ):
     
     observables, contract = bias(model)
@@ -146,38 +157,52 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     ### burn-in with the unadjusted method ###
     kernel = umclmc.build_kernel(model.logdensity_fn)
     save_num= (int)(jnp.rint(save_frac * num_steps1))
-    adap = umclmc.Adaptation(model.ndims, alpha= alpha, bias_type= bias_type, save_num= save_num, C=C, power= power,
+    adap = umclmc.Adaptation(model.ndims, alpha= alpha, bias_type= bias_type, save_num= save_num, C=C, power= power, r_end = r_end,
                              observables= observables, contract= contract)
     final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps1, num_chains, mesh)
     
     if early_stop: # here I am cheating a bit, because I am not sure if it is possible to do a while loop in jax and save something at every step. Therefore I rerun burn-in with exactly the same parameters and stop at the point where the orignal while loop would have stopped. The release implementation should not have that.
         num_steps_while = while_steps_num(info1['while_cond'])
-        print(num_steps_while, save_num)
+        #print(num_steps_while, save_num)
         final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps_while, num_chains, mesh)
 
     ### refine the results with the adjusted method ###
-    integrator = generate_isokinetic_integrator(integrator_coefficients)
-    gradient_calls_per_step= len(integrator_coefficients) // 2
-    
+    _acc_prob = acc_prob
+    if integrator_coefficients == None:
+        high_dims = model.ndims > 200
+        _integrator_coefficients = omelyan_coefficients if high_dims else mclachlan_coefficients
+        if acc_prob == None:
+            _acc_prob = 0.9 if high_dims else 0.7
+        
+    else:
+        _integrator_coefficients = integrator_coefficients
+        if acc_prob == None:
+            _acc_prob = 0.9
+            
+        
+    integrator = generate_isokinetic_integrator(_integrator_coefficients)
+    gradient_calls_per_step= len(_integrator_coefficients) // 2 #scheme = BABAB..AB scheme has len(scheme)//2 + 1 Bs. The last doesn't count because that gradient can be reused in the next step.
+
     if diagonal_preconditioning:
         sqrt_diag_cov= final_adaptation_state.sqrt_diag_cov
         
         # scale the stepsize so that it reflects averag scale change of the preconditioning
         average_scale_change = jnp.sqrt(jnp.average(jnp.square(sqrt_diag_cov)))
-        final_adaptation_state = final_adaptation_state._replace(stepsize= final_adaptation_state.stepsize / average_scale_change)
+        final_adaptation_state = final_adaptation_state._replace(step_size= final_adaptation_state.step_size / average_scale_change)
 
     else:
         sqrt_diag_cov= 1.
     
     kernel = build_kernel(model.logdensity_fn, integrator, sqrt_diag_cov= sqrt_diag_cov)
     initial_state= HMCState(final_state.position, final_state.logdensity, final_state.logdensity_grad)
-
-    adap = Adaptation(final_adaptation_state, steps_per_sample, acc_prob, 
+    num_samples = num_steps2 // (gradient_calls_per_step * steps_per_sample)
+    num_adaptation_samples = num_samples//2 # number of samples after which the stepsize is fixed.
+    
+    adap = Adaptation(final_adaptation_state, num_adaptation_samples, steps_per_sample, _acc_prob, 
                       observables= observables, contract= contract)
     
-    num_samples = num_steps2 // (gradient_calls_per_step * steps_per_sample)
     final_state, final_adaptation_state, info2 = run_eca(key_mclmc, initial_state, kernel, adap, num_samples, num_chains, mesh)
     
-    return info1, info2
+    return info1, info2, gradient_calls_per_step, _acc_prob
     
     

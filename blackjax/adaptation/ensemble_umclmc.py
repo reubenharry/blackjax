@@ -121,7 +121,7 @@ class AdaptationState(NamedTuple):
     sqrt_diag_cov: Any
     step_size: float
     
-    steps: int
+    step_count: int
     EEVPD: float
     EEVPD_wanted: float
     history: Any    
@@ -164,7 +164,7 @@ def equipartition_fullrank_loss(delta_z):
 class Adaptation:
     
     def __init__(self, num_dims,
-                 alpha= 1., C= 0.1, power = 3./8.,
+                 alpha= 1., C= 0.1, power = 3./8., r_end= 0.01,
                  bias_type= 0, save_num = 10,
                  observables= lambda x: 0., contract= lambda x: 0.
                  ):
@@ -173,6 +173,7 @@ class Adaptation:
         self.alpha = alpha
         self.C = C
         self.power = power
+        self.r_end = r_end
         self.observables = observables
         self.contract = contract
         self.bias_type = bias_type
@@ -188,7 +189,7 @@ class Adaptation:
         self.initial_state = AdaptationState(L= jnp.inf, # do not add noise for the first step
                                              sqrt_diag_cov= jnp.ones(num_dims),
                                              step_size= 0.01 * jnp.sqrt(num_dims),
-                                             steps= 0, 
+                                             step_count= 0, 
                                              EEVPD=1e-3, EEVPD_wanted=1e-3,
                                              history=history)
         
@@ -216,7 +217,7 @@ class Adaptation:
         history_observables = update_history(Etheta['observables'], adaptation_state.history.observables)        
         history_weights = update_history_scalar(1., adaptation_state.history.weights)
         fluctuations = contract_history(history_observables, history_weights)
-        history_stopping = update_history_scalar(jax.lax.cond(adaptation_state.steps > len(history_weights), lambda _: fluctuations[0], lambda _: jnp.nan, operand=None), 
+        history_stopping = update_history_scalar(jax.lax.cond(adaptation_state.step_count > len(history_weights), lambda _: fluctuations[0], lambda _: jnp.nan, operand=None), 
                                                  adaptation_state.history.stopping)
         history = History(history_observables, history_stopping, history_weights)
         
@@ -240,7 +241,7 @@ class Adaptation:
         # determine if we want to finish this stage (i.e. if loss is no longer decreassing)
         #increasing = history.stopping[0] > history.stopping[-1] # will be false if some elements of history are still nan (have not been filled yet). Do not be tempted to simply change to while_cond = history[0] < history[-1]
         #while_cond = ~increasing
-        while_cond = (fluctuations[0] > 5e-3) | (adaptation_state.steps < self.save_num)
+        while_cond = (fluctuations[0] > self.r_end) | (adaptation_state.step_count < self.save_num)
         
         info_to_be_stored = {'L': adaptation_state.L, 'step_size': adaptation_state.step_size, 
                              'EEVPD_wanted': EEVPD_wanted, 'EEVPD': EEVPD, 
@@ -251,7 +252,7 @@ class Adaptation:
         adaptation_state_new = AdaptationState(L, 
                                                sqrt_diag_cov,
                                                adaptation_state.step_size * eps_factor, 
-                                               adaptation_state.steps + 1, 
+                                               adaptation_state.step_count + 1, 
                                                EEVPD, 
                                                EEVPD_wanted,
                                                history)
