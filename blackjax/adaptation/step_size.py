@@ -289,7 +289,59 @@ class PredictorState(NamedTuple):
     bounds: Any # bounds for the bisection
 
 
-def predictor_algorithm(total_samples, acc_prob_wanted, eps_init, maxiter= 20):
+def bisection(sgn_f, a, b, num_iter=100):
+    """my implementation of the root finding with bisection (jaxopt version has if, which makes it non jit compilable)"""
+    def body_fn(i, state):
+        """Body function for the for loop."""
+        a, b, sgn_a, sgn_b = state
+        c = (a + b) / 2.0
+        sgn_c = sgn_f(c)
+        update_left = (sgn_a * sgn_c < 0)
+        a_new = jnp.where(update_left, a, c)
+        b_new = jnp.where(update_left, c, b)
+        fa_new = jnp.where(update_left, sgn_a, sgn_c)
+        fb_new = jnp.where(update_left, sgn_c, sgn_b)
+        return a_new, b_new, fa_new, fb_new
+
+    # Initial values
+    sgn_a = sgn_f(a)
+    sgn_b = sgn_f(b)
+    
+    # Initial state: (a, b, fa, fb)
+    initial_state = (a, b, sgn_a, sgn_b)
+    
+    # Run the for loop
+    final_state = jax.lax.fori_loop(0, num_iter, body_fn, initial_state)
+    
+    # Extract the midpoint
+    a_final, b_final, _, _ = final_state
+    root = (a_final + b_final) / 2.0
+    return root
+
+
+def find_other_edge(sgn_f, x0, maxiter= 20):
+    """given one edge of the bracket, determine the other one (here we assume that the function is monotonically decreassing)"""
+
+    s= sgn_f(x0)
+    
+    # iteratively enlarge the other edge until it changes the sign
+    def body(state):
+        x, c, count = state[0], state[1], state[2]
+        x_new = jnp.exp(c*s) * x # proposed location of the other edge
+        
+        return jax.lax.select(jnp.isfinite(sgn_f(x_new)),  # if it gives nans, don't update and reduce the expansion factor
+                            jnp.array([x_new, c, count+1.]), 
+                            jnp.array([x, c * 0.5, count+1.]))
+
+    state = jax.lax.while_loop(cond_fun= lambda state: (sgn_f(state[0]) * s > 0) & (state[2] < maxiter), 
+                    body_fun= body, 
+                    init_val= jnp.array([x0, jnp.log(1.5), 0.]))
+    
+    return state[0]
+
+
+
+def predictor_algorithm(total_samples, acc_prob_wanted, eps_init):
         
     trust_params = trust_reparam(acc_prob_wanted, sig= 0.7)
 
@@ -323,34 +375,14 @@ def predictor_algorithm(total_samples, acc_prob_wanted, eps_init, maxiter= 20):
 
         # construct the bracketing interval
         sgn_f = lambda x: jnp.sign(f(x))
-    
-        # given one edge of the bracket, determine the other one (here we assume that the function is monotonically decreassing)
-        def find_other_edge(x0):
-            
-            s= sgn_f(x0)
-            
-            # iteratively enlarge the other edge until it changes the sign
-            def body(state):
-                x, c, count = state[0], state[1], state[2]
-                x_new = jnp.exp(c*s) * x # proposed location of the other edge
-                
-                return jax.lax.select(jnp.isfinite(sgn_f(x_new)),  # if it gives nans, don't update and reduce the expansion factor
-                                    jnp.array([x_new, c, count+1.]), 
-                                    jnp.array([x, c * 0.5, count+1.]))
-
-            state = jax.lax.while_loop(cond_fun= lambda state: (sgn_f(state[0]) * s > 0) & (state[2] < maxiter), 
-                            body_fun= body, 
-                            init_val= jnp.array([x0, jnp.log(1.5), 0.]))
-            
-            return state[0]
 
         # update the bounds
         bounds= state.bounds
-        bounds = jnp.array([jax.lax.select(sgn_f(bounds[0]) < 0, find_other_edge(bounds[0]), bounds[0]), # if the lower edge no longer has f(a) > 0, udpate it
-                            jax.lax.select(sgn_f(bounds[1]) > 0, find_other_edge(bounds[1]), bounds[1])]) # if the upper edge no longer has f(b) < 0, udpate it
+        bounds = jnp.array([jax.lax.select(sgn_f(bounds[0]) < 0, find_other_edge(sgn_f, bounds[0]), bounds[0]), # if the lower edge no longer has f(a) > 0, udpate it
+                            jax.lax.select(sgn_f(bounds[1]) > 0, find_other_edge(sgn_f, bounds[1]), bounds[1])]) # if the upper edge no longer has f(b) < 0, udpate it
         
         # finally run bisection, to determine the stepsize that will be used in the next step
-        x0 = Bisection(f, lower = bounds[0], upper = bounds[1]).run().params
+        x0 = bisection(sgn_f, *bounds)
         
         
         return PredictorState(eps, acc_prob, weights, count, bounds), x0

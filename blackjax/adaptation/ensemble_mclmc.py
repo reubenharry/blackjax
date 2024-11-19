@@ -73,13 +73,12 @@ class Adaptation:
 
         #steps_per_sample = (int)(jnp.max(jnp.array([Lfull / step_size, 1])))
                 
-        
         ### Initialize the dual averaging adaptation ###
-        # da_init, self.da_update, da_final = dual_averaging_adaptation(target= acc_prob_target)
-        # da_state = da_init(step_size)
+        da_init, self.da_update, _ = dual_averaging_adaptation(target= acc_prob_target)
+        da_state = da_init(step_size)
         
         ### Initialize the predictor adaptation
-        da_state, self.da_update = predictor_algorithm(num_adaptation_samples, acc_prob_target, step_size)
+        #da_state, self.da_update = predictor_algorithm(num_adaptation_samples, acc_prob_target, step_size)
         
         self.initial_state = AdaptationState(steps_per_sample, step_size, da_state, 0)
         
@@ -110,17 +109,17 @@ class Adaptation:
         # hyperparameter adaptation
         adaptation_phase = adaptation_state.sample_count < self.num_adaptation_samples  
         
-        # def update(_):
-        #     da_state = self.da_update(adaptation_state.da_state, acc_prob)
-        #     step_size = jnp.exp(da_state.log_step_size)
-        #     return da_state, step_size
-        # def dont_update(_):
-        #     da_state = adaptation_state.da_state
-        #     return da_state, jnp.exp(da_state.log_step_size_avg)
-        #
-        #da_state, step_size = jax.lax.cond(adaptation_phase, update, dont_update, operand=None)
+        def update(_):
+            da_state = self.da_update(adaptation_state.da_state, acc_prob)
+            step_size = jnp.exp(da_state.log_step_size)
+            return da_state, step_size
+        def dont_update(_):
+            da_state = adaptation_state.da_state
+            return da_state, jnp.exp(da_state.log_step_size_avg)
         
-        da_state, step_size = self.da_update(adaptation_state.da_state, adaptation_state.step_size, acc_prob)
+        da_state, step_size = jax.lax.cond(adaptation_phase, update, dont_update, operand=None)
+        
+        #da_state, step_size = self.da_update(adaptation_state.da_state, adaptation_state.step_size, acc_prob)
         
         return AdaptationState(adaptation_state.steps_per_sample, step_size, da_state, adaptation_state.sample_count + 1), info_to_be_stored
 
@@ -200,7 +199,7 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     kernel = build_kernel(model.logdensity_fn, integrator, sqrt_diag_cov= sqrt_diag_cov)
     initial_state= HMCState(final_state.position, final_state.logdensity, final_state.logdensity_grad)
     num_samples = num_steps2 // (gradient_calls_per_step * steps_per_sample)
-    num_adaptation_samples = num_samples#//2 # number of samples after which the stepsize is fixed.
+    num_adaptation_samples = num_samples//2 # number of samples after which the stepsize is fixed.
     
     adap = Adaptation(final_adaptation_state, num_adaptation_samples, steps_per_sample, _acc_prob, 
                       observables= observables, contract= contract)
