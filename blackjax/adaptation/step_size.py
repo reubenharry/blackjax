@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Step size adaptation"""
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Any
 
 import jax
 import jax.numpy as jnp
@@ -20,6 +20,12 @@ import jax.numpy as jnp
 from blackjax.mcmc.hmc import HMCState
 from blackjax.optimizers.dual_averaging import dual_averaging
 from blackjax.types import PRNGKey
+
+from jax.scipy.stats import norm
+from scipy.special import beta as beta_func
+from jaxopt import Bisection
+
+
 
 __all__ = [
     "DualAveragingAdaptationState",
@@ -257,3 +263,98 @@ def find_reasonable_step_size(
     rss_state = jax.lax.while_loop(do_continue, update, rss_state)
 
     return rss_state.step_size
+
+
+
+# we here assume that acceptance_rate(eps) is a monotonically decreasing function.
+
+
+def trust_reparam(x, sig):
+    """determine the parameters for the trust function"""
+    beta = (x * (1-x**2))/sig**2
+    alpha = beta * x / (1 - x)
+    return alpha, beta, beta_func(1 + alpha, 1 + beta)
+
+
+def trust(x, alpha, beta, norm):
+    """trust function"""
+    return jnp.power(x, alpha) * jnp.power(1-x, beta) / norm
+
+
+class PredictorState(NamedTuple):
+    eps: Any # stepsizes used at each step
+    acc_prob: Any # acceptance probabilities at these stepsizes
+    weights: Any # weights in averaging. All of these arrays are of fixed size, so weights are used to discard the entries in the arrays that have not yet been filled.
+    count: int # place in the array that will be filled next.
+    bounds: Any # bounds for the bisection
+
+
+def predictor_algorithm(total_samples, acc_prob_wanted, eps_init, maxiter= 20):
+        
+    trust_params = trust_reparam(acc_prob_wanted, sig= 0.7)
+
+    init = PredictorState(
+        eps = jnp.ones(total_samples),
+        acc_prob = 0.5 * jnp.ones(total_samples), # these values don't really matter, because they have zero weights
+        weights = jnp.zeros(total_samples), 
+        count= 0,
+        bounds = jnp.ones(2) * eps_init
+        )
+
+
+    def update(state, eps_new, acc_prob_new):
+        """given the acceptance probabilities and stepsizes, predict the next best stepsize (and update the state)
+            eps_new and acc_prob_new are scalars."""
+
+        # update the data
+        eps = state.eps.at[state.count].set(eps_new)
+        acc_prob = (state.acc_prob).at[state.count].set(acc_prob_new)
+        weights = state.weights.at[state.count].set(1.)
+        count = state.count + 1
+        
+        # construct the function whose root do we need to find
+        c = norm.ppf(0.5 * acc_prob)
+        
+        def f(x):
+            acc = 2 * norm.cdf(c * jnp.square(x / eps)) 
+            w = trust(acc, *trust_params) * weights
+            return jnp.average(acc, weights= w) - acc_prob_wanted
+
+
+        # construct the bracketing interval
+        sgn_f = lambda x: jnp.sign(f(x))
+    
+        # given one edge of the bracket, determine the other one (here we assume that the function is monotonically decreassing)
+        def find_other_edge(x0):
+            
+            s= sgn_f(x0)
+            
+            # iteratively enlarge the other edge until it changes the sign
+            def body(state):
+                x, c, count = state[0], state[1], state[2]
+                x_new = jnp.exp(c*s) * x # proposed location of the other edge
+                
+                return jax.lax.select(jnp.isfinite(sgn_f(x_new)),  # if it gives nans, don't update and reduce the expansion factor
+                                    jnp.array([x_new, c, count+1.]), 
+                                    jnp.array([x, c * 0.5, count+1.]))
+
+            state = jax.lax.while_loop(cond_fun= lambda state: (sgn_f(state[0]) * s > 0) & (state[2] < maxiter), 
+                            body_fun= body, 
+                            init_val= jnp.array([x0, jnp.log(1.5), 0.]))
+            
+            return state[0]
+
+        # update the bounds
+        bounds= state.bounds
+        bounds = jnp.array([jax.lax.select(sgn_f(bounds[0]) < 0, find_other_edge(bounds[0]), bounds[0]), # if the lower edge no longer has f(a) > 0, udpate it
+                            jax.lax.select(sgn_f(bounds[1]) > 0, find_other_edge(bounds[1]), bounds[1])]) # if the upper edge no longer has f(b) < 0, udpate it
+        
+        # finally run bisection, to determine the stepsize that will be used in the next step
+        x0 = Bisection(f, lower = bounds[0], upper = bounds[1]).run().params
+        
+        
+        return PredictorState(eps, acc_prob, weights, count, bounds), x0
+    
+    
+    
+    return init, update 
