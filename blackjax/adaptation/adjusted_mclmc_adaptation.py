@@ -43,7 +43,8 @@ def adjusted_mclmc_find_L_and_step_size(
     params=None,
     max=False,
     num_windows=1,
-    tuning_factor=1.0
+    tuning_factor=1.0,
+    logdensity_grad_fn=None,
 ):
     """
     Finds the optimal value of the parameters for the MH-MCHMC algorithm.
@@ -100,7 +101,8 @@ def adjusted_mclmc_find_L_and_step_size(
             target=target,
             diagonal_preconditioning=diagonal_preconditioning,
             max=max,
-            tuning_factor=tuning_factor
+            tuning_factor=tuning_factor,
+            logdensity_grad_fn=logdensity_grad_fn
         )(
             state, params, num_steps, window_key
         )
@@ -127,7 +129,8 @@ def adjusted_mclmc_find_L_and_step_size(
             fix_L_first_da=True,
             diagonal_preconditioning=diagonal_preconditioning,
             max=max,
-            tuning_factor=tuning_factor
+            tuning_factor=tuning_factor,
+            logdensity_grad_fn=logdensity_grad_fn
         )(
             state, params, num_steps, part2_key2
         )
@@ -148,7 +151,8 @@ def adjusted_mclmc_make_L_step_size_adaptation(
     diagonal_preconditioning,
     fix_L_first_da=False,
     max=False,
-    tuning_factor=1.0
+    tuning_factor=1.0,
+    logdensity_grad_fn=None,
 ):
     """Adapts the stepsize and L of the MCLMC kernel. Designed for the unadjusted MCLMC"""
 
@@ -281,7 +285,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
         (
             (state, params, (dual_avg_state, step_size_max), (_, average)),
-            (info, _),
+            (info, position_samples),
         ) = step_size_adaptation(
             mask,
             state,
@@ -291,6 +295,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             initial_da=initial_da,
             update_da=update_da,
         )
+        # position_samples = position_samples[num_steps1:]
 
         # jax.debug.print("state history {x}", x=state_history.position.shape)
 
@@ -308,6 +313,16 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
             if max:
                 contract = lambda x: jnp.sqrt(jnp.max(x)*dim)
+
+                # fisher = jax.vmap(lambda x: logdensity_grad_fn(x)**2,in_axes=0)(position_samples).mean(axis=0)
+                # jax.debug.print("fisher {x}", x=jnp.sqrt(jnp.sum(1/(fisher))))
+                # # print(fisher.shape, "fisher shape")
+                # jax.debug.print("fisher \n")
+                
+                # svd = jnp.linalg.svd(position_samples)
+                # jax.debug.print("svd {x}", x=jnp.sqrt(svd.S[0]))
+                # contract : lambda x : jnp.sqrt(svd.S[0])
+                # L_dir = svd.Vh[0]
             else:
                 contract = lambda x: jnp.sqrt(jnp.sum(x))*tuning_factor
 
@@ -316,6 +331,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                 contract(variances) / params.L,
                 Lratio_upperbound,
             )
+            jax.debug.print("new L {x}", x=params.L * change)
             params = params._replace(
                 L=params.L * change, step_size=params.step_size * change
             )
