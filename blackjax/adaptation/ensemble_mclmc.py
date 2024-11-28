@@ -25,14 +25,14 @@ from blackjax.mcmc.mhmclmc import build_kernel_malt
 import blackjax.adaptation.ensemble_umclmc as umclmc
 from blackjax.adaptation.ensemble_umclmc import equipartition_diagonal, equipartition_diagonal_loss, equipartition_fullrank, equipartition_fullrank_loss
 
-from blackjax.adaptation.step_size import dual_averaging_adaptation, predictor_algorithm
+from blackjax.adaptation.step_size import dual_averaging_adaptation, bisection_monotonic_fn
 
     
 
 class AdaptationState(NamedTuple):
     steps_per_sample: float
     step_size: float
-    da_state: Any
+    epsadap_state: Any
     sample_count: int
     
 
@@ -40,7 +40,7 @@ class AdaptationState(NamedTuple):
 def build_kernel(logdensity_fn, integrator, sqrt_diag_cov):
     """MCLMC kernel"""
     
-    kernel = build_kernel_malt(logdensity_fn, integrator, sqrt_diag_cov= sqrt_diag_cov, L_proposal_factor = 0.5)
+    kernel = build_kernel_malt(logdensity_fn, integrator, sqrt_diag_cov= sqrt_diag_cov, L_proposal_factor = 1.25)
     
     def sequential_kernel(key, state, adap):
         return kernel(key, state, step_size= adap.step_size, num_integration_steps= adap.steps_per_sample)
@@ -53,10 +53,12 @@ class Adaptation:
     
     def __init__(self, adap_state, num_adaptation_samples,
                  steps_per_sample, acc_prob_target= 0.8,
-                 observables= lambda x: 0., contract= lambda x: 0.):
+                 observables = lambda x: 0.,
+                 observables_for_bias = lambda x: 0., contract= lambda x: 0.):
         
         self.num_adaptation_samples= num_adaptation_samples
         self.observables = observables
+        self.observables_for_bias = observables_for_bias
         self.contract = contract
         
         ### Determine the initial hyperparameters ###
@@ -74,54 +76,62 @@ class Adaptation:
         #steps_per_sample = (int)(jnp.max(jnp.array([Lfull / step_size, 1])))
                 
         ### Initialize the dual averaging adaptation ###
-        da_init, self.da_update, _ = dual_averaging_adaptation(target= acc_prob_target)
-        da_state = da_init(step_size)
+        #da_init_fn, self.epsadap_update, _ = dual_averaging_adaptation(target= acc_prob_target)
+        #epsadap_state = da_init_fn(step_size)
         
-        ### Initialize the predictor adaptation
-        #da_state, self.da_update = predictor_algorithm(num_adaptation_samples, acc_prob_target, step_size)
+        ### Initialize the bisection for finding the step size
+        epsadap_state, self.epsadap_update = bisection_monotonic_fn(acc_prob_target)
         
-        self.initial_state = AdaptationState(steps_per_sample, step_size, da_state, 0)
+        self.initial_state = AdaptationState(steps_per_sample, step_size, epsadap_state, 0)
         
         
     def summary_statistics_fn(self, state, info, rng_key):
      
         return {'acceptance_probability': info.acceptance_rate,
+                #'inv_acceptance_probability': 1./info.acceptance_rate,
                 'equipartition_diagonal': equipartition_diagonal(state), 
                 'equipartition_fullrank': equipartition_fullrank(state, rng_key), 
-                'observables': self.observables(state.position)
+                'observables': self.observables(state.position),
+                'observables_for_bias': self.observables_for_bias(state.position)
                 }
         
-        
+
     def update(self, adaptation_state, Etheta):
         
         # combine the expectation values to get useful scalars
         acc_prob = Etheta['acceptance_probability']
+        #acc_prob = 1./Etheta['inv_acceptance_probability']
         equi_diag = equipartition_diagonal_loss(Etheta['equipartition_diagonal'])
         equi_full = equipartition_fullrank_loss(Etheta['equipartition_fullrank'])
-        true_bias = self.contract(Etheta['observables'])
+        true_bias = self.contract(Etheta['observables_for_bias'])
         
         
         info_to_be_stored = {'L': adaptation_state.step_size * adaptation_state.steps_per_sample, 'steps_per_sample': adaptation_state.steps_per_sample, 'step_size': adaptation_state.step_size, 
                              'acc_prob': acc_prob,
-                             'equi_diag': equi_diag, 'equi_full': equi_full, 'bias': true_bias}
-
+                             'equi_diag': equi_diag, 'equi_full': equi_full, 'bias': true_bias,
+                             'observables': Etheta['observables']
+                             }
 
         # hyperparameter adaptation
-        adaptation_phase = adaptation_state.sample_count < self.num_adaptation_samples  
         
-        def update(_):
-            da_state = self.da_update(adaptation_state.da_state, acc_prob)
-            step_size = jnp.exp(da_state.log_step_size)
-            return da_state, step_size
-        def dont_update(_):
-            da_state = adaptation_state.da_state
-            return da_state, jnp.exp(da_state.log_step_size_avg)
+        # Dual Averaging
+        # adaptation_phase = adaptation_state.sample_count < self.num_adaptation_samples  
         
-        da_state, step_size = jax.lax.cond(adaptation_phase, update, dont_update, operand=None)
+        # def update(_):
+        #     da_state = self.epsadap_update(adaptation_state.epsadap_state, acc_prob)
+        #     step_size = jnp.exp(da_state.log_step_size)
+        #     return da_state, step_size
         
-        #da_state, step_size = self.da_update(adaptation_state.da_state, adaptation_state.step_size, acc_prob)
+        # def dont_update(_):
+        #     da_state = adaptation_state.epsadap_state
+        #     return da_state, jnp.exp(da_state.log_step_size_avg)
         
-        return AdaptationState(adaptation_state.steps_per_sample, step_size, da_state, adaptation_state.sample_count + 1), info_to_be_stored
+        # epsadap_state, step_size = jax.lax.cond(adaptation_phase, update, dont_update, operand=None)
+        
+        # Bisection        
+        epsadap_state, step_size = self.epsadap_update(adaptation_state.epsadap_state, adaptation_state.step_size, acc_prob)
+        
+        return AdaptationState(adaptation_state.steps_per_sample, step_size, epsadap_state, adaptation_state.sample_count + 1), info_to_be_stored
 
 
 
@@ -149,9 +159,11 @@ def while_steps_num(cond):
 def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
           alpha= 1., bias_type= 0, save_frac= 0.2, C= 0.1, power= 3./8., early_stop= True, r_end= 1e-2,# stage1 parameters
           diagonal_preconditioning= True, integrator_coefficients= None, steps_per_sample= 10, acc_prob= None, 
+          observables = lambda x: None, 
+          ensemble_observables= None
           ):
     
-    observables, contract = bias(model)
+    observables_for_bias, contract = bias(model)
     key_init, key_umclmc, key_mclmc = jax.random.split(rng_key, 3)
     
     # initialize the chains
@@ -161,13 +173,14 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     kernel = umclmc.build_kernel(model.logdensity_fn)
     save_num= (int)(jnp.rint(save_frac * num_steps1))
     adap = umclmc.Adaptation(model.ndims, alpha= alpha, bias_type= bias_type, save_num= save_num, C=C, power= power, r_end = r_end,
-                             observables= observables, contract= contract)
-    final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps1, num_chains, mesh)
+                             observables= observables, observables_for_bias= observables_for_bias, contract= contract)
+    final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps1, num_chains, mesh, ensemble_observables)
     
     if early_stop: # here I am cheating a bit, because I am not sure if it is possible to do a while loop in jax and save something at every step. Therefore I rerun burn-in with exactly the same parameters and stop at the point where the orignal while loop would have stopped. The release implementation should not have that.
-        num_steps_while = while_steps_num(info1['while_cond'])
+        
+        num_steps_while = while_steps_num((info1[0] if ensemble_observables != None else info1)['while_cond'])
         #print(num_steps_while, save_num)
-        final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps_while, num_chains, mesh)
+        final_state, final_adaptation_state, info1 = run_eca(key_umclmc, initial_state, kernel, adap, num_steps_while, num_chains, mesh, ensemble_observables)
 
     ### refine the results with the adjusted method ###
     _acc_prob = acc_prob
@@ -202,9 +215,9 @@ def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
     num_adaptation_samples = num_samples//2 # number of samples after which the stepsize is fixed.
     
     adap = Adaptation(final_adaptation_state, num_adaptation_samples, steps_per_sample, _acc_prob, 
-                      observables= observables, contract= contract)
+                      observables= observables, observables_for_bias= observables_for_bias, contract= contract)
     
-    final_state, final_adaptation_state, info2 = run_eca(key_mclmc, initial_state, kernel, adap, num_samples, num_chains, mesh)
+    final_state, final_adaptation_state, info2 = run_eca(key_mclmc, initial_state, kernel, adap, num_samples, num_chains, mesh, ensemble_observables)
     
     return info1, info2, gradient_calls_per_step, _acc_prob
     

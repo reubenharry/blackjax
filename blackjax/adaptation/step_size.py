@@ -266,127 +266,46 @@ def find_reasonable_step_size(
 
 
 
-# we here assume that acceptance_rate(eps) is a monotonically decreasing function.
 
-
-def trust_reparam(x, sig):
-    """determine the parameters for the trust function"""
-    beta = (x * (1-x**2))/sig**2
-    alpha = beta * x / (1 - x)
-    return alpha, beta, beta_func(1 + alpha, 1 + beta)
-
-
-def trust(x, alpha, beta, norm):
-    """trust function"""
-    return jnp.power(x, alpha) * jnp.power(1-x, beta) / norm
-
-
-class PredictorState(NamedTuple):
-    eps: Any # stepsizes used at each step
-    acc_prob: Any # acceptance probabilities at these stepsizes
-    weights: Any # weights in averaging. All of these arrays are of fixed size, so weights are used to discard the entries in the arrays that have not yet been filled.
-    count: int # place in the array that will be filled next.
-    bounds: Any # bounds for the bisection
-
-
-def bisection(sgn_f, a, b, num_iter=100):
-    """my implementation of the root finding with bisection (jaxopt version has if, which makes it non jit compilable)"""
-    def body_fn(i, state):
-        """Body function for the for loop."""
-        a, b, sgn_a, sgn_b = state
-        c = (a + b) / 2.0
-        sgn_c = sgn_f(c)
-        update_left = (sgn_a * sgn_c < 0)
-        a_new = jnp.where(update_left, a, c)
-        b_new = jnp.where(update_left, c, b)
-        fa_new = jnp.where(update_left, sgn_a, sgn_c)
-        fb_new = jnp.where(update_left, sgn_c, sgn_b)
-        return a_new, b_new, fa_new, fb_new
-
-    # Initial values
-    sgn_a = sgn_f(a)
-    sgn_b = sgn_f(b)
+def bisection_monotonic_fn(acc_prob_wanted, reduce_shift = jnp.log(2.), tolerance= 0.03):
+    """Bisection of a monotonically decreassing function, that doesn't require an initially bracketing interval."""
     
-    # Initial state: (a, b, fa, fb)
-    initial_state = (a, b, sgn_a, sgn_b)
-    
-    # Run the for loop
-    final_state = jax.lax.fori_loop(0, num_iter, body_fn, initial_state)
-    
-    # Extract the midpoint
-    a_final, b_final, _, _ = final_state
-    root = (a_final + b_final) / 2.0
-    return root
-
-
-def find_other_edge(sgn_f, x0, maxiter= 20):
-    """given one edge of the bracket, determine the other one (here we assume that the function is monotonically decreassing)"""
-
-    s= sgn_f(x0)
-    
-    # iteratively enlarge the other edge until it changes the sign
-    def body(state):
-        x, c, count = state[0], state[1], state[2]
-        x_new = jnp.exp(c*s) * x # proposed location of the other edge
+    def update(state, exp_x, acc_rate_new):
         
-        return jax.lax.select(jnp.isfinite(sgn_f(x_new)),  # if it gives nans, don't update and reduce the expansion factor
-                            jnp.array([x_new, c, count+1.]), 
-                            jnp.array([x, c * 0.5, count+1.]))
-
-    state = jax.lax.while_loop(cond_fun= lambda state: (sgn_f(state[0]) * s > 0) & (state[2] < maxiter), 
-                    body_fun= body, 
-                    init_val= jnp.array([x0, jnp.log(1.5), 0.]))
-    
-    return state[0]
-
-
-
-def predictor_algorithm(total_samples, acc_prob_wanted, eps_init):
+        bounds, terminated = state
         
-    trust_params = trust_reparam(acc_prob_wanted, sig= 0.7)
-
-    init = PredictorState(
-        eps = jnp.ones(total_samples),
-        acc_prob = 0.5 * jnp.ones(total_samples), # these values don't really matter, because they have zero weights
-        weights = jnp.zeros(total_samples), 
-        count= 0,
-        bounds = jnp.ones(2) * eps_init
-        )
-
-
-    def update(state, eps_new, acc_prob_new):
-        """given the acceptance probabilities and stepsizes, predict the next best stepsize (and update the state)
-            eps_new and acc_prob_new are scalars."""
-
-        # update the data
-        eps = state.eps.at[state.count].set(eps_new)
-        acc_prob = (state.acc_prob).at[state.count].set(acc_prob_new)
-        weights = state.weights.at[state.count].set(1.)
-        count = state.count + 1
-        
-        # construct the function whose root do we need to find
-        c = norm.ppf(0.5 * acc_prob)
-        
-        def f(x):
-            acc = 2 * norm.cdf(c * jnp.square(x / eps)) 
-            w = trust(acc, *trust_params) * weights
-            return jnp.average(acc, weights= w) - acc_prob_wanted
-
-
-        # construct the bracketing interval
-        sgn_f = lambda x: jnp.sign(f(x))
-
         # update the bounds
-        bounds= state.bounds
-        bounds = jnp.array([jax.lax.select(sgn_f(bounds[0]) < 0, find_other_edge(sgn_f, bounds[0]), bounds[0]), # if the lower edge no longer has f(a) > 0, udpate it
-                            jax.lax.select(sgn_f(bounds[1]) > 0, find_other_edge(sgn_f, bounds[1]), bounds[1])]) # if the upper edge no longer has f(b) < 0, udpate it
+        acc_high = acc_rate_new > acc_prob_wanted
+        x = jnp.log(exp_x)
         
-        # finally run bisection, to determine the stepsize that will be used in the next step
-        x0 = bisection(sgn_f, *bounds)
+        def on_true(bounds):
+            bounds0 = jnp.max(jnp.array([bounds[0], x]))
+            return jnp.array([bounds0, bounds[1]]), bounds0 + reduce_shift
+            
+        def on_false(bounds):
+            bounds1 = jnp.min(jnp.array([bounds[1], x]))
+            return jnp.array([bounds[0], bounds1]), bounds1 - reduce_shift
+           
+            
+        bounds_new, x_new  = jax.lax.cond(acc_high, on_true, on_false, bounds)
         
         
-        return PredictorState(eps, acc_prob, weights, count, bounds), x0
+        # if we have already found a bracketing interval, do bisection, otherwise further reduce or increase the bounds
+        bracketing = jnp.all(jnp.isfinite(bounds_new))
+        
+        def reduce(bounds):    
+            return x_new
+
+        def bisect(bounds):
+            return jnp.average(bounds)
+            
+        x_new = jax.lax.cond(bracketing, bisect, reduce, bounds_new)
+        
+        stepsize = terminated * exp_x + (1-terminated) * jnp.exp(x_new)
+        
+        terminated_new = (jnp.abs(acc_rate_new - acc_prob_wanted) < tolerance) | terminated
+        
+        return (bounds_new, terminated_new), stepsize
     
     
-    
-    return init, update 
+    return (jnp.array([-jnp.inf, jnp.inf]), False), update

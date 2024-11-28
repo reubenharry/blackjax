@@ -207,9 +207,9 @@ def run_inference_algorithm(
     return final_state, state_history, info_history
 
 
-def eca_step(kernel, summary_statistics_fn, adaptation_update, num_chains):
+def eca_step(kernel, summary_statistics_fn, adaptation_update, num_chains, ensemble_info= None):
 
-    def step(state_all, xs):
+    def _step(state_all, xs):
         """This function operates on a single device."""
         state, adaptation_state = state_all # state is an array of states, one for each chain on this device. adaptation_state is the same for all chains, so it is not an array.
         _, keys_sampling, key_adaptation = xs # keys_sampling.shape = (chains_per_device, )
@@ -225,13 +225,23 @@ def eca_step(kernel, summary_statistics_fn, adaptation_update, num_chains):
         adaptation_state, info_to_be_stored = adaptation_update(adaptation_state, Etheta)
         
         return (state, adaptation_state), info_to_be_stored
+    
+    
+    if ensemble_info != None:
+        
+        def step(state_all, xs):
+            (state, adaptation_state), info_to_be_stored = _step(state_all, xs)
+            return (state, adaptation_state), (info_to_be_stored, vmap(ensemble_info)(state.position))
+        
+        return step
 
-    return step
+    else:
+        return _step
 
 
-def run_eca(rng_key, initial_state, kernel, adaptation, num_steps, num_chains, mesh):
+def run_eca(rng_key, initial_state, kernel, adaptation, num_steps, num_chains, mesh, ensemble_info= None):
  
-    step = eca_step(kernel, adaptation.summary_statistics_fn, adaptation.update, num_chains)
+    step = eca_step(kernel, adaptation.summary_statistics_fn, adaptation.update, num_chains, ensemble_info)
 
 
     def all_steps(initial_state, keys_sampling, keys_adaptation):

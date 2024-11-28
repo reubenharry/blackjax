@@ -26,6 +26,7 @@ from blackjax.mcmc.integrators import _normalized_flatten_array
 from blackjax.util import ensemble_execute_fn
 
 
+
 def no_nans(a):
     flat_a, unravel_fn = ravel_pytree(a)
     return jnp.all(jnp.isfinite(flat_a))
@@ -57,7 +58,6 @@ def build_kernel(logdensity_fn):
 
     
     return sequential_kernel
-
 
 
     
@@ -166,7 +166,7 @@ class Adaptation:
     def __init__(self, num_dims,
                  alpha= 1., C= 0.1, power = 3./8., r_end= 0.01,
                  bias_type= 0, save_num = 10,
-                 observables= lambda x: 0., contract= lambda x: 0.
+                 observables= lambda x: 0., observables_for_bias= lambda x: 0., contract= lambda x: 0.
                  ):
 
         self.num_dims = num_dims
@@ -175,6 +175,7 @@ class Adaptation:
         self.power = power
         self.r_end = r_end
         self.observables = observables
+        self.observables_for_bias = observables_for_bias 
         self.contract = contract
         self.bias_type = bias_type
         self.save_num = save_num
@@ -203,6 +204,7 @@ class Adaptation:
                 'x': position_flat, 'xsq': jnp.square(position_flat), 
                 'E': info['energy_change'], 'Esq': jnp.square(info['energy_change']),
                 'rejection_rate_nans': info['nans'],
+                'observables_for_bias': self.observables_for_bias(state.position),
                 'observables': self.observables(state.position),
                 'entropy': - info['logdensity']
                 }
@@ -214,7 +216,7 @@ class Adaptation:
         equi_diag = equipartition_diagonal_loss(Etheta['equipartition_diagonal'])
         equi_full = equipartition_fullrank_loss(Etheta['equipartition_fullrank'])
         
-        history_observables = update_history(Etheta['observables'], adaptation_state.history.observables)        
+        history_observables = update_history(Etheta['observables_for_bias'], adaptation_state.history.observables)        
         history_weights = update_history_scalar(1., adaptation_state.history.weights)
         fluctuations = contract_history(history_observables, history_weights)
         history_stopping = update_history_scalar(jax.lax.cond(adaptation_state.step_count > len(history_weights), lambda _: fluctuations[0], lambda _: jnp.nan, operand=None), 
@@ -224,7 +226,7 @@ class Adaptation:
         L = self.alpha * jnp.sqrt(jnp.sum(Etheta['xsq'] - jnp.square(Etheta['x']))) # average over the ensemble, sum over parameters (to get sqrt(d))
         sqrt_diag_cov = jnp.sqrt(Etheta['xsq'] - jnp.square(Etheta['x']))
         EEVPD = (Etheta['Esq'] - jnp.square(Etheta['E'])) / self.num_dims        
-        true_bias = self.contract(Etheta['observables'])
+        true_bias = self.contract(Etheta['observables_for_bias'])
         nans = (Etheta['rejection_rate_nans'] > 0.) #| (~jnp.isfinite(eps_factor))
 
         # hyperparameter adaptation
@@ -247,7 +249,8 @@ class Adaptation:
                              'EEVPD_wanted': EEVPD_wanted, 'EEVPD': EEVPD, 
                              'equi_diag': equi_diag, 'equi_full': equi_full, 'bias': true_bias,
                              'r_max': fluctuations[0], 'r_avg': fluctuations[1],
-                             'while_cond': while_cond, 'entropy': Etheta['entropy']}
+                             'while_cond': while_cond, 'entropy': Etheta['entropy'],
+                             'observables': Etheta['observables']}
     
         adaptation_state_new = AdaptationState(L, 
                                                sqrt_diag_cov,
