@@ -41,7 +41,7 @@ def adjusted_mclmc_find_L_and_step_size(
     frac_tune3=0.1,
     diagonal_preconditioning=True,
     params=None,
-    max=False,
+    max="avg",
     num_windows=1,
     tuning_factor=1.0,
     logdensity_grad_fn=None,
@@ -92,6 +92,7 @@ def adjusted_mclmc_find_L_and_step_size(
         (
             state,
             params,
+            eigenvector
             
         ) = adjusted_mclmc_make_L_step_size_adaptation(
             kernel=mclmc_kernel,
@@ -112,13 +113,14 @@ def adjusted_mclmc_find_L_and_step_size(
         part2_key1, part2_key2 = jax.random.split(part2_key, 2)
 
         state, params = adjusted_mclmc_make_adaptation_L(
-            mclmc_kernel, frac=frac_tune3, Lfactor=0.4, max=max
+            mclmc_kernel, frac=frac_tune3, Lfactor=0.5, max=max, eigenvector=eigenvector,
         )(state, params, num_steps, part2_key1)
 
         # jax.debug.print("params after stage 3 {x}", x=params)
         (
             state,
             params,
+            _
             
         ) = adjusted_mclmc_make_L_step_size_adaptation(
             kernel=mclmc_kernel,
@@ -150,7 +152,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
     target,
     diagonal_preconditioning,
     fix_L_first_da=False,
-    max=False,
+    max='avg',
     tuning_factor=1.0,
     logdensity_grad_fn=None,
 ):
@@ -238,6 +240,11 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                     + (1 - mask) * params.L,
                 )
 
+            if max!='max_svd':
+                state_position = None
+            else:
+                state_position = state.position
+
             return (
                 state,
                 params,
@@ -245,7 +252,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
                 previous_weight_and_average,
             ), (
                 info,
-                None,
+                state_position,
             )
 
         return step
@@ -295,7 +302,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             initial_da=initial_da,
             update_da=update_da,
         )
-        # position_samples = position_samples[num_steps1:]
+        
 
         # jax.debug.print("state history {x}", x=state_history.position.shape)
 
@@ -307,31 +314,40 @@ def adjusted_mclmc_make_L_step_size_adaptation(
 
 
         # determine L
+        eigenvector = None 
         if num_steps2 != 0.0:
             x_average, x_squared_average = average[0], average[1]
             variances = x_squared_average - jnp.square(x_average)
 
-            if max:
+            if max=='max':
                 contract = lambda x: jnp.sqrt(jnp.max(x)*dim)
 
                 # fisher = jax.vmap(lambda x: logdensity_grad_fn(x)**2,in_axes=0)(position_samples).mean(axis=0)
                 # jax.debug.print("fisher {x}", x=jnp.sqrt(jnp.sum(1/(fisher))))
                 # # print(fisher.shape, "fisher shape")
                 # jax.debug.print("fisher \n")
-                
-                # svd = jnp.linalg.svd(position_samples)
-                # jax.debug.print("svd {x}", x=jnp.sqrt(svd.S[0]))
-                # contract : lambda x : jnp.sqrt(svd.S[0])
-                # L_dir = svd.Vh[0]
-            else:
+            elif max=='avg':
+                # jax.debug.print("turning factor {x}", x=tuning_factor)
                 contract = lambda x: jnp.sqrt(jnp.sum(x))*tuning_factor
+            elif max=='max_svd':
+                position_samples = position_samples[num_steps1:]
+                svd = jnp.linalg.svd(position_samples / jnp.sqrt(num_steps2))
+                contract = lambda x : svd.S[0]*jnp.sqrt(dim)
+                # contract = lambda x: jnp.sqrt(jnp.max(x)*dim)
+                # contract = lambda x: jnp.sqrt(jnp.sum(x))*tuning_factor
+                eigenvector = svd.Vh[0] / jnp.linalg.norm(svd.Vh[0])
+                # jax.debug.print("svd {x}", x=jnp.linalg.norm(eigenvector))
+                # L_dir = svd.Vh[0]
+                # jax.debug.print("svd {x}", x=jnp.sqrt(svd.S[0]))
+            else:
+                raise ValueError("max should be either 'max' or 'avg' or 'max_svd")
 
             change = jax.lax.clamp(
                 Lratio_lowerbound,
                 contract(variances) / params.L,
                 Lratio_upperbound,
             )
-            jax.debug.print("new L {x}", x=params.L * change)
+            # jax.debug.print("new L {x}", x=params.L * change)
             params = params._replace(
                 L=params.L * change, step_size=params.step_size * change
             )
@@ -374,12 +390,13 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             # jax.debug.print("pst run {x}", x=info.acceptance_rate.mean())
             # jax.debug.print("stepsize and L {x}", x=(params.step_size, params.L))
 
-        return state, params
+
+        return state, params, eigenvector
 
     return L_step_size_adaptation
 
 
-def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor, max=False):
+def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor, max='avg', eigenvector=None):
     """determine L by the autocorrelations (around 10 effective samples are needed for this to be accurate)"""
 
     def adaptation_L(state, params, num_steps, key):
@@ -402,16 +419,26 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor, max=False):
             xs=adaptation_L_keys,
         )
 
-        if max:
+        if max=='max':
             contract = jnp.min
         else:
             contract = jnp.mean
 
         flat_samples = jax.vmap(lambda x: ravel_pytree(x)[0])(samples)
+
+        # jax.debug.print("flat samples {x}", x=flat_samples.shape)
+
+        if eigenvector is not None:
+
+            jax.debug.print("eigen {x}", x=eigenvector.shape)
+            flat_samples = jnp.expand_dims(jnp.einsum('ij,j', flat_samples, eigenvector),1)
+            # jax.debug.print("flat samples 2 {x}", x=flat_samples.shape)
+
         # number of effective samples per 1 actual sample
         ess = contract(effective_sample_size(flat_samples[None, ...]))/num_steps
 
-        # jax.debug.print("{x}foo", x=jnp.mean(ess)/num_steps)
+        # jax.debug.print("{x}foo", x=jnp.mean(ess))
+        # jax.debug.print("{x}L and mean ess", x=(params.L, jnp.mean(ess)))
 
         return state, params._replace(L=Lfactor * params.L / jnp.mean(ess))
 
