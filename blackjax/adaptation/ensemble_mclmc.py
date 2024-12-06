@@ -157,7 +157,7 @@ def while_steps_num(cond):
 
 
 def emaus(model, num_steps1, num_steps2, num_chains, mesh, rng_key,
-          alpha= 1., bias_type= 0, save_frac= 0.2, C= 0.1, power= 3./8., early_stop= True, r_end= 1e-2,# stage1 parameters
+          alpha= 1.9, bias_type= 0, save_frac= 0.2, C= 0.1, power= 3./8., early_stop= True, r_end= 5e-3,# stage1 parameters
           diagonal_preconditioning= True, integrator_coefficients= None, steps_per_sample= 10, acc_prob= None, 
           observables = lambda x: None, 
           ensemble_observables= None
