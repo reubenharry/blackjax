@@ -12,6 +12,7 @@ from . import (
     periodic_orbital,
     random_walk,
     rmhmc,
+    underdamped_langevin
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "random_walk",
     "mclmc",
     "adjusted_mclmc",
+    "underdamped_langevin"
 ]
