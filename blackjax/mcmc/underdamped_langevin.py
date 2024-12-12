@@ -14,26 +14,27 @@
 """Public API for the Underdamped Langevin Kernel"""
 from typing import Callable, NamedTuple
 
+from blackjax.mcmc import metrics
 import jax
 
 from blackjax.base import SamplingAlgorithm
 from blackjax.mcmc.integrators import (
     IntegratorState,
-    isokinetic_mclachlan,
-    with_isokinetic_maruyama,
+    velocity_verlet,
+    with_maruyama,
 )
 from blackjax.types import ArrayLike, PRNGKey
 from blackjax.util import generate_unit_vector, pytree_size
 
-__all__ = ["LangevinInfo", "init", "build_kernel", "as_top_level_api"]
+__all__ = ["UnderdampedLangevinInfo", "init", "build_kernel", "as_top_level_api"]
 
 
-class LangevinInfo(NamedTuple):
+class UnderdampedLangevinInfo(NamedTuple):
     """
-    Additional information on the Langevin transition.
+    Additional information on the UnderdampedLangevin transition.
 
     logdensity
-        The log-density of the distribution at the current step of the Langevin chain.
+        The log-density of the distribution at the current step of the UnderdampedLangevin chain.
     kinetic_change
         The difference in kinetic energy between the current and previous step.
     energy_change
@@ -51,7 +52,7 @@ def init(position: ArrayLike, logdensity_fn, rng_key):
 
     return IntegratorState(
         position=position,
-        momentum=generate_unit_vector(rng_key, position),
+        momentum=jax.random.normal(rng_key, shape = (position.shape[0], )),
         logdensity=l,
         logdensity_grad=g,
     )
@@ -63,7 +64,7 @@ def build_kernel(logdensity_fn, sqrt_diag_cov, integrator):
     Parameters
     ----------
     integrator
-        The symplectic integrator to use to integrate the Langevin dynamics.
+        The symplectic integrator to use to integrate the UnderdampedLangevin dynamics.
     L
         the momentum decoherence rate.
     step_size
@@ -77,20 +78,25 @@ def build_kernel(logdensity_fn, sqrt_diag_cov, integrator):
 
     """
 
-    step = with_isokinetic_maruyama(
-        integrator(logdensity_fn=logdensity_fn, sqrt_diag_cov=sqrt_diag_cov)
+    inverse_mass_matrix = sqrt_diag_cov # TODO: off by inverse?
+    metric = metrics.default_metric(inverse_mass_matrix)
+    # jax.debug.print("metric of 2 {x}", x=metric.kinetic_energy(jax.numpy.ones((10,))+1))
+    step = with_maruyama(
+        integrator(logdensity_fn=logdensity_fn, kinetic_energy_fn=metric.kinetic_energy)
     )
 
     def kernel(
         rng_key: PRNGKey, state: IntegratorState, L: float, step_size: float
-    ) -> tuple[IntegratorState, LangevinInfo]:
-        (position, momentum, logdensity, logdensitygrad), kinetic_change = step(
+    ) -> tuple[IntegratorState, UnderdampedLangevinInfo]:
+        (position, momentum, logdensity, logdensitygrad) = step(
             state, step_size, L, rng_key
         )
 
+        kinetic_change =  metric.kinetic_energy(momentum) - metric.kinetic_energy(state.momentum)
+
         return IntegratorState(
             position, momentum, logdensity, logdensitygrad
-        ), LangevinInfo(
+        ), UnderdampedLangevinInfo(
             logdensity=logdensity,
             energy_change=kinetic_change - logdensity + state.logdensity,
             kinetic_change=kinetic_change,
@@ -103,10 +109,10 @@ def as_top_level_api(
     logdensity_fn: Callable,
     L,
     step_size,
-    integrator=isokinetic_mclachlan,
+    integrator=velocity_verlet,
     sqrt_diag_cov=1.0,
 ) -> SamplingAlgorithm:
-    """The general Langevin kernel builder (:meth:`blackjax.mcmc.langevin.build_kernel`, alias `blackjax.langevin.build_kernel`) can be
+    """The general UnderdampedLangevin kernel builder (:meth:`blackjax.mcmc.underdamped_langevin.build_kernel`, alias `blackjax.langevin.build_kernel`) can be
     cumbersome to manipulate. Since most users only need to specify the kernel
     parameters at initialization time, we provide a helper function that
     specializes the general kernel.
@@ -117,23 +123,23 @@ def as_top_level_api(
     Examples
     --------
 
-    A new langevin kernel can be initialized and used with the following code:
+    A new underdamped_langevin kernel can be initialized and used with the following code:
 
     .. code::
 
-        langevin = blackjax.mcmc.langevin.langevin(
+        underdamped_langevin = blackjax.mcmc.underdamped_langevin.underdamped_langevin(
             logdensity_fn=logdensity_fn,
             L=L,
             step_size=step_size
         )
-        state = langevin.init(position)
-        new_state, info = langevin.step(rng_key, state)
+        state = underdamped_langevin.init(position)
+        new_state, info = underdamped_langevin.step(rng_key, state)
 
     Kernels are not jit-compiled by default so you will need to do it manually:
 
     .. code::
 
-        step = jax.jit(langevin.step)
+        step = jax.jit(underdamped_langevin.step)
         new_state, info = step(rng_key, state)
 
     Parameters

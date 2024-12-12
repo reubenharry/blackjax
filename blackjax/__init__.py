@@ -22,7 +22,7 @@ from .mcmc import hmc as _hmc
 from .mcmc import mala as _mala
 from .mcmc import marginal_latent_gaussian
 from .mcmc import mclmc as _mclmc
-from .mcmc import underdamped_langevin as _langevin
+from .mcmc import underdamped_langevin as _underdamped_langevin
 from .mcmc import nuts as _nuts
 from .mcmc import periodic_orbital, random_walk
 from .mcmc import rmhmc as _rmhmc
@@ -115,7 +115,7 @@ additive_step_random_walk.register_factory("normal_random_walk", normal_random_w
 mclmc = generate_top_level_api_from(_mclmc)
 adjusted_mclmc = generate_top_level_api_from(_adjusted_mclmc)
 discrete_rescaling = generate_top_level_api_from(_discrete_rescaling)
-langevin = generate_top_level_api_from(_langevin)
+underdamped_langevin = generate_top_level_api_from(_underdamped_langevin)
 elliptical_slice = generate_top_level_api_from(_elliptical_slice)
 ghmc = generate_top_level_api_from(_ghmc)
 barker_proposal = generate_top_level_api_from(barker)

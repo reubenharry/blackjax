@@ -320,7 +320,7 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             variances = x_squared_average - jnp.square(x_average)
 
             if max=='max':
-                contract = lambda x: jnp.sqrt(jnp.max(x)*dim)
+                contract = lambda x: jnp.sqrt(jnp.max(x)*dim)*tuning_factor
 
                 # fisher = jax.vmap(lambda x: logdensity_grad_fn(x)**2,in_axes=0)(position_samples).mean(axis=0)
                 # jax.debug.print("fisher {x}", x=jnp.sqrt(jnp.sum(1/(fisher))))

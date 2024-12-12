@@ -99,6 +99,7 @@ def generalized_two_stage_integrator(
 
     def one_step(state: IntegratorState, step_size: float):
         position, momentum, _, logdensity_grad = state
+        # jax.debug.print("momentum {x}", x=position)
         # auxiliary infomation generated during integration for diagnostics. It is
         # updated by the operator1 and operator2 at each call.
         momentum_update_info = None
@@ -169,6 +170,7 @@ def euclidean_position_update_fn(logdensity_fn: Callable):
             position,
             kinetic_grad,
         )
+        # jax.debug.print("grad {x}", x=kinetic_grad)
         logdensity, logdensity_grad = logdensity_and_grad_fn(new_position)
         return new_position, logdensity, logdensity_grad, None
 
@@ -194,6 +196,7 @@ def euclidean_momentum_update_fn(kinetic_energy_fn: KineticEnergy):
         )
         if is_last_call:
             return new_momentum, None, None
+        # jax.debug.print("new_momentum {x}", x=momentum)
         kinetic_grad = kinetic_energy_grad_fn(new_momentum)
         return new_momentum, kinetic_grad, None
 
@@ -397,7 +400,7 @@ isokinetic_mclachlan = generate_isokinetic_integrator(mclachlan_coefficients)
 isokinetic_omelyan = generate_isokinetic_integrator(omelyan_coefficients)
 
 
-def partially_refresh_momentum(momentum, rng_key, step_size, L):
+def partially_refresh_momentum_isokinetic(momentum, rng_key, step_size, L):
     """Adds a small noise to momentum and normalizes.
 
     Parameters
@@ -429,13 +432,38 @@ def partially_refresh_momentum(momentum, rng_key, step_size, L):
         operand=None,
     )
 
+def partially_refresh_momentum_langevin(momentum, rng_key, step_size, L):
+    """Adds a small noise to momentum and normalizes.
+
+    Parameters
+    ----------
+    rng_key
+        The pseudo-random number generator key used to generate random numbers.
+    momentum
+        PyTree that the structure the output should to match.
+    step_size
+        Step size
+    L
+        controls rate of momentum change
+
+    Returns
+    -------
+    momentum with random change in angle
+    """
+    m, unravel_fn = ravel_pytree(momentum)
+    dim = m.shape[0]
+    nu = jnp.exp(-1./(L/step_size)) # MEADS paper, Equation 6 
+    # jax.debug.print("nu {x}", x=(nujnp.sqrt(1- nu*2))
+    z = jax.random.normal(rng_key, shape = (dim, ))
+    return m * nu + jnp.sqrt(1- nu**2) * z
+
 
 def with_isokinetic_maruyama(integrator):
     def stochastic_integrator(init_state, step_size, L_proposal, rng_key):
         key1, key2 = jax.random.split(rng_key)
         # partial refreshment
         state = init_state._replace(
-            momentum=partially_refresh_momentum(
+            momentum=partially_refresh_momentum_isokinetic(
                 momentum=init_state.momentum,
                 rng_key=key1,
                 L=L_proposal,
@@ -447,7 +475,7 @@ def with_isokinetic_maruyama(integrator):
 
         # partial refreshment
         state = state._replace(
-            momentum=partially_refresh_momentum(
+            momentum=partially_refresh_momentum_isokinetic(
                 momentum=state.momentum,
                 rng_key=key2,
                 L=L_proposal,
@@ -455,6 +483,35 @@ def with_isokinetic_maruyama(integrator):
             )
         )
         return state, info
+
+    return stochastic_integrator
+
+def with_maruyama(integrator):
+    def stochastic_integrator(init_state, step_size, L_proposal, rng_key):
+        key1, key2 = jax.random.split(rng_key)
+        # partial refreshment
+        state = init_state._replace(
+            momentum=partially_refresh_momentum_langevin(
+                momentum=init_state.momentum,
+                rng_key=key1,
+                L=L_proposal,
+                step_size=step_size * 0.5,
+            )
+        )
+        # jax.debug.print("momentum {x}", x=init_state.momentum)
+        # one step of the deterministic dynamics
+        state = integrator(state, step_size)
+
+        # partial refreshment
+        state = state._replace(
+            momentum=partially_refresh_momentum_langevin(
+                momentum=state.momentum,
+                rng_key=key2,
+                L=L_proposal,
+                step_size=step_size * 0.5,
+            )
+        )
+        return state
 
     return stochastic_integrator
 
