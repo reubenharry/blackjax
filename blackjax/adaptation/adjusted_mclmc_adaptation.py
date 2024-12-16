@@ -338,9 +338,9 @@ def adjusted_mclmc_make_L_step_size_adaptation(
             elif max=='max_svd':
                 position_samples = position_samples[num_steps1:]
                 svd = jnp.linalg.svd(position_samples / jnp.sqrt(num_steps2))
-                # contract = lambda x : svd.S[0]*jnp.sqrt(dim)
+                contract = lambda x : svd.S[0]*jnp.sqrt(dim)*tuning_factor
                 # contract = lambda x: jnp.sqrt(jnp.max(x)*dim)
-                contract = lambda x: jnp.sqrt(jnp.sum(x))*tuning_factor
+                # contract = lambda x: jnp.sqrt(jnp.sum(x))*tuning_factor
                 eigenvector = svd.Vh[0] / jnp.linalg.norm(svd.Vh[0])
                 # jax.debug.print("svd {x}", x=jnp.linalg.norm(eigenvector))
                 # L_dir = svd.Vh[0]
