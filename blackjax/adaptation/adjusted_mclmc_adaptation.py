@@ -79,6 +79,10 @@ def adjusted_mclmc_find_L_and_step_size(
     A tuple containing the final state of the MCMC algorithm and the final hyperparameters.
     """
 
+    frac_tune1 /= num_windows
+    frac_tune2 /= num_windows
+    frac_tune3 /= num_windows
+
     dim = pytree_size(state.position)
     if params is None:
         params = MCLMCAdaptationState(

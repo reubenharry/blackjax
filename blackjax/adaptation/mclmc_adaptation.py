@@ -103,6 +103,11 @@ def mclmc_find_L_and_step_size(
             diagonal_preconditioning=preconditioning,
         )
     """
+
+    frac_tune1 /= num_windows
+    frac_tune2 /= num_windows
+    frac_tune3 /= num_windows
+
     dim = pytree_size(state.position)
     params = MCLMCAdaptationState(
         jnp.sqrt(dim), jnp.sqrt(dim) * 0.25, sqrt_diag_cov=jnp.ones((dim,))
