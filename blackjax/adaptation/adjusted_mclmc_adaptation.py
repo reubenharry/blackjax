@@ -446,7 +446,7 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor, max='avg', eigenvect
         # jax.debug.print("{x}foo", x=jnp.mean(ess))
         # jax.debug.print("{x}L and mean ess", x=(params.L, jnp.mean(ess)))
 
-        return state, params._replace(L=jnp.clip(Lfactor * params.L / jnp.mean(ess), max=params.L*2))
+        return state, params._replace(L=Lfactor * params.L / jnp.mean(ess))
 
     return adaptation_L
 
