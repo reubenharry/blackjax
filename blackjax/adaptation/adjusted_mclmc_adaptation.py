@@ -1,3 +1,4 @@
+
 import jax
 import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
@@ -114,12 +115,12 @@ def adjusted_mclmc_find_L_and_step_size(
     # jax.debug.print("params after stage 2 {x}", x=params)
 
     if frac_tune3 != 0:
-        for i in range(2):
+        for i in range(num_windows):
             part2_key = jax.random.fold_in(part2_key, i)
             part2_key1, part2_key2 = jax.random.split(part2_key, 2)
 
             state, params = adjusted_mclmc_make_adaptation_L(
-                mclmc_kernel, frac=frac_tune3, Lfactor=0.5, max=max, eigenvector=eigenvector,
+                mclmc_kernel, frac=frac_tune3, Lfactor=0.35, max=max, eigenvector=eigenvector,
             )(state, params, num_steps, part2_key1)
 
             # jax.debug.print("params after stage 3 {x}", x=params)
@@ -444,7 +445,7 @@ def adjusted_mclmc_make_adaptation_L(kernel, frac, Lfactor, max='avg', eigenvect
         ess = contract(effective_sample_size(flat_samples[None, ...]))/num_steps
 
         # jax.debug.print("{x}foo", x=jnp.mean(ess))
-        # jax.debug.print("{x}L and mean ess", x=(params.L, jnp.mean(ess)))
+        jax.debug.print("L and mean ess {x}", x=(params.L, jnp.mean(ess)))
 
         return state, params._replace(L=jnp.clip(Lfactor * params.L / jnp.mean(ess), max=params.L*2))
 

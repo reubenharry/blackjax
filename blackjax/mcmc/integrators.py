@@ -347,6 +347,7 @@ def esh_dynamics_momentum_update_one_step(sqrt_diag_cov=1.0):
         )
         new_momentum_normalized, _ = _normalized_flatten_array(new_momentum_raw)
         gr = unravel_fn(new_momentum_normalized * sqrt_diag_cov)
+        # jax.debug.print("cov mat {x}", x=sqrt_diag_cov)
         next_momentum = unravel_fn(new_momentum_normalized)
         kinetic_energy_change = (
             delta

@@ -142,6 +142,7 @@ def build_kernel(
         proposal = hmc.HMCState(
             proposal.position, proposal.logdensity, proposal.logdensity_grad
         )
+        # jax.debug.print("num integration steps {x}", x=info.num_integration_steps)
         return proposal, info
 
     return kernel

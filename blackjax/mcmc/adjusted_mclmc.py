@@ -60,6 +60,7 @@ def build_kernel(
     of the chain and that returns a new state of the chain along with
     information about the transition.
     """
+    # jax.debug.print("num_integration_steps {x}", x=integration_steps_fn(jax.random.PRNGKey(0)))
 
     def kernel(
         rng_key: PRNGKey,
@@ -71,6 +72,7 @@ def build_kernel(
         """Generate a new sample with the MHMCHMC kernel."""
 
         num_integration_steps = integration_steps_fn(state.random_generator_arg)
+
 
         key_momentum, key_integrator = jax.random.split(rng_key, 2)
         momentum = generate_unit_vector(key_momentum, state.position)
@@ -197,6 +199,7 @@ def adjusted_mclmc_proposal(
     A kernel that generates a new chain state and information about the transition.
 
     """
+
 
     def step(i, vars):
         state, kinetic_energy, rng_key = vars
