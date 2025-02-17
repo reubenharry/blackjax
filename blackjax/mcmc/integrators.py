@@ -186,7 +186,6 @@ def euclidean_momentum_update_fn(kinetic_energy_fn: KineticEnergy):
         auxiliary_info=None,
         is_last_call=False,
     ):
-        
         del auxiliary_info
         new_momentum = jax.tree_util.tree_map(
             lambda x, grad: x + step_size * coef * grad,
