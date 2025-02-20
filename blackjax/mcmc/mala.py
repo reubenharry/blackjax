@@ -65,7 +65,7 @@ def init(position: ArrayLikeTree, logdensity_fn: Callable) -> MALAState:
     return MALAState(position, logdensity, logdensity_grad)
 
 
-def build_kernel():
+def build_kernel(unadjusted=False):
     """Build a MALA kernel.
 
     Returns
@@ -106,6 +106,8 @@ def build_kernel():
         new_state = integrator(key_integrator, state, step_size)
         new_state = MALAState(*new_state)
 
+        if unadjusted: return new_state, MALAInfo(1.0, True)
+
         log_p_accept = compute_acceptance_ratio(state, new_state, step_size=step_size)
         accepted_state, info = sample_proposal(key_rmh, log_p_accept, state, new_state)
         do_accept, p_accept, _ = info
@@ -120,6 +122,7 @@ def build_kernel():
 def as_top_level_api(
     logdensity_fn: Callable,
     step_size: float,
+    unadjusted: bool = False,
 ) -> SamplingAlgorithm:
     """Implements the (basic) user interface for the MALA kernel.
 
@@ -170,7 +173,7 @@ def as_top_level_api(
 
     """
 
-    kernel = build_kernel()
+    kernel = build_kernel(unadjusted=unadjusted)
 
     def init_fn(position: ArrayLikeTree, rng_key=None):
         del rng_key
