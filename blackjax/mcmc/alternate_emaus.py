@@ -1,7 +1,8 @@
 import jax
 import jax.numpy as jnp
-from blackjax.util import run_eca
+
 import blackjax.adaptation.ensemble_umclmc as umclmc
+from blackjax.util import run_eca
 
 
 def emaus(

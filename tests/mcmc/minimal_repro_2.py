@@ -7,10 +7,8 @@ from jax.random import normal, split
 from jax.sharding import NamedSharding, PartitionSpec
 from jax.tree_util import tree_leaves, tree_map
 
-from blackjax.util import run_eca
-
 import blackjax.adaptation.ensemble_umclmc as umclmc
-
+from blackjax.util import run_eca
 
 # def eca_step(
 #     kernel, summary_statistics_fn, adaptation_update, num_chains, ensemble_info=None
@@ -62,8 +60,6 @@ import blackjax.adaptation.ensemble_umclmc as umclmc
 
 #     else:
 #         return _step
-
-
 
 
 # def ensemble_execute_fn(
@@ -224,25 +220,29 @@ import blackjax.adaptation.ensemble_umclmc as umclmc
 #     return final_state, final_adaptation_state, info_history
 
 
-mesh = jax.sharding.Mesh(devices=jax.devices(),axis_names= "chains")
+mesh = jax.sharding.Mesh(devices=jax.devices(), axis_names="chains")
 
 # key_init, key_umclmc, key_mclmc = jax.random.split(jax.random.key(0), 3)
 
 num_chains = 128
 ndims = 2
 
+
 def logdensity_fn(x):
-        mu2 = 0.03 * (x[0] ** 2 - 100)
-        return -0.5 * (jnp.square(x[0] / 10.0) + jnp.square(x[1] - mu2))
+    mu2 = 0.03 * (x[0] ** 2 - 100)
+    return -0.5 * (jnp.square(x[0] / 10.0) + jnp.square(x[1] - mu2))
+
 
 def transform(x):
-        return x
+    return x
+
 
 def sample_init(key):
-        z = jax.random.normal(key, shape=(2,))
-        x0 = 10.0 * z[0]
-        x1 = 0.03 * (x0**2 - 100) + z[1]
-        return jnp.array([x0, x1])
+    z = jax.random.normal(key, shape=(2,))
+    x0 = 10.0 * z[0]
+    x1 = 0.03 * (x0**2 - 100) + z[1]
+    return jnp.array([x0, x1])
+
 
 # # initialize the chains
 # initial_state = umclmc.initialize(
@@ -283,12 +283,13 @@ def sample_init(key):
 #         early_stop=True,
 #     )
 
-from blackjax.mcmc.integrators import mclachlan_coefficients
-
 import sys
+
 # sys.path.append(".")
 # sys.path.append("../")
 from blackjax.adaptation.ensemble_mclmc import emaus
+from blackjax.mcmc.integrators import mclachlan_coefficients
+
 # from blackjax.mcmc.alternate_emaus import emaus
 
 
@@ -375,30 +376,30 @@ from blackjax.adaptation.ensemble_mclmc import emaus
 key = jax.random.key(0)
 
 emaus(
-            logdensity_fn=logdensity_fn,
-            sample_init=sample_init,
-            transform=transform,
-            ndims=ndims,
-            num_steps1=100,
-            num_steps2=300,
-            num_chains=num_chains,
-            mesh=mesh,
-            rng_key=key,
-            alpha=1.9,
-            C=0.1,
-            early_stop=1,
-            r_end=1e-2,
-            diagonal_preconditioning=True,
-            integrator_coefficients=mclachlan_coefficients,
-            steps_per_sample=15,
-            acc_prob=None,
-            ensemble_observables=lambda x: x,
-            # adap=adap,
-            # kernel=kernel,
-            # initial_state=initial_state,
-            # key_umclmc=key_umclmc,
-            # ensemble_observables = lambda x: vec @ x
-        )  # run the algorithm
+    logdensity_fn=logdensity_fn,
+    sample_init=sample_init,
+    transform=transform,
+    ndims=ndims,
+    num_steps1=100,
+    num_steps2=300,
+    num_chains=num_chains,
+    mesh=mesh,
+    rng_key=key,
+    alpha=1.9,
+    C=0.1,
+    early_stop=1,
+    r_end=1e-2,
+    diagonal_preconditioning=True,
+    integrator_coefficients=mclachlan_coefficients,
+    steps_per_sample=15,
+    acc_prob=None,
+    ensemble_observables=lambda x: x,
+    # adap=adap,
+    # kernel=kernel,
+    # initial_state=initial_state,
+    # key_umclmc=key_umclmc,
+    # ensemble_observables = lambda x: vec @ x
+)  # run the algorithm
 
 
 # a = jnp.array([8.0, 4.0])

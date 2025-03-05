@@ -62,8 +62,6 @@ def eca_step(
         return _step
 
 
-
-
 def ensemble_execute_fn(
     func,
     rng_key,
@@ -116,6 +114,7 @@ def ensemble_execute_fn(
     )  # random keys, distributed across devices
     # apply F in parallel
     return parallel_execute(X, keys)
+
 
 def run_eca(
     rng_key,
@@ -222,25 +221,29 @@ def run_eca(
     return final_state, final_adaptation_state, info_history
 
 
-mesh = jax.sharding.Mesh(devices=jax.devices(),axis_names= "chains")
+mesh = jax.sharding.Mesh(devices=jax.devices(), axis_names="chains")
 
 key_init, key_umclmc, key_mclmc = jax.random.split(jax.random.key(0), 3)
 
 num_chains = 128
 ndims = 2
 
+
 def logdensity_fn(x):
-        mu2 = 0.03 * (x[0] ** 2 - 100)
-        return -0.5 * (jnp.square(x[0] / 10.0) + jnp.square(x[1] - mu2))
+    mu2 = 0.03 * (x[0] ** 2 - 100)
+    return -0.5 * (jnp.square(x[0] / 10.0) + jnp.square(x[1] - mu2))
+
 
 def transform(x):
-        return x
+    return x
+
 
 def sample_init(key):
-        z = jax.random.normal(key, shape=(2,))
-        x0 = 10.0 * z[0]
-        x1 = 0.03 * (x0**2 - 100) + z[1]
-        return jnp.array([x0, x1])
+    z = jax.random.normal(key, shape=(2,))
+    x0 = 10.0 * z[0]
+    x1 = 0.03 * (x0**2 - 100) + z[1]
+    return jnp.array([x0, x1])
+
 
 # initialize the chains
 initial_state = umclmc.initialize(
@@ -249,12 +252,12 @@ initial_state = umclmc.initialize(
 
 alpha = 1.9
 C = 0.1
-r_end=5e-3
-ensemble_observables=lambda x: x
+r_end = 5e-3
+ensemble_observables = lambda x: x
 
 # burn-in with the unadjusted method #
 kernel = umclmc.build_kernel(logdensity_fn)
-save_num = 20 # (int)(jnp.rint(save_frac * num_steps1))
+save_num = 20  # (int)(jnp.rint(save_frac * num_steps1))
 adap = umclmc.Adaptation(
     ndims,
     alpha=alpha,
@@ -270,16 +273,16 @@ adap = umclmc.Adaptation(
 
 
 final_state, final_adaptation_state, info1 = run_eca(
-        key_umclmc,
-        initial_state,
-        kernel,
-        adap,
-        100,
-        num_chains,
-        mesh,
-        ensemble_observables,
-        early_stop=True,
-    )
+    key_umclmc,
+    initial_state,
+    kernel,
+    adap,
+    100,
+    num_chains,
+    mesh,
+    ensemble_observables,
+    early_stop=True,
+)
 
 
 # a = jnp.array([8.0, 4.0])

@@ -292,8 +292,6 @@ def emaus(
         _acc_prob,
     )
 
-
-
     final_state, final_adaptation_state, info2 = run_eca(
         key_mclmc,
         initial_state,
