@@ -225,10 +225,9 @@ adap = umclmc.Adaptation(
     ),
 )
 
-####
-# This one works
-####
 
+
+### I think the problem is using `final_state` in the subsequent computation
 final_state, final_adaptation_state, info1 = run_eca(
     key_umclmc,
     initial_state,
@@ -241,46 +240,137 @@ final_state, final_adaptation_state, info1 = run_eca(
     early_stop=True,
 )
 
-# refine the results with the adjusted method
-_acc_prob = 0.9
-
-integrator = generate_isokinetic_integrator(mclachlan_coefficients)
-gradient_calls_per_step = (
-    len(mclachlan_coefficients) // 2
-)  # scheme = BABAB..AB scheme has len(scheme)//2 + 1 Bs. The last doesn't count because that gradient can be reused in the next step.
-
-inverse_mass_matrix = 1.0
 
 
-steps_per_sample = 15
-num_steps2 = 100
+def all_steps(initial_state, keys_sampling, keys_adaptation):
+    """This function operates on a single device. key is a random key for this device."""
+    
+    # refine the results with the adjusted method
+    _acc_prob = 0.9
 
-num_samples = num_steps2 // (gradient_calls_per_step * steps_per_sample)
-num_adaptation_samples = (
-    num_samples // 2
-)  # number of samples after which the stepsize is fixed.
+    integrator = generate_isokinetic_integrator(mclachlan_coefficients)
+    gradient_calls_per_step = (
+        len(mclachlan_coefficients) // 2
+    )  # scheme = BABAB..AB scheme has len(scheme)//2 + 1 Bs. The last doesn't count because that gradient can be reused in the next step.
+
+    inverse_mass_matrix = 1.0
+
+
+    steps_per_sample = 15
+    num_steps2 = 100
+
+    num_samples = num_steps2 // (gradient_calls_per_step * steps_per_sample)
+    num_adaptation_samples = (
+        num_samples // 2
+    )  # number of samples after which the stepsize is fixed.
+
+
+    initial_state = HMCState(
+    final_state.position, final_state.logdensity, final_state.logdensity_grad
+    )
+
+    adaptation= Adaptation(
+    final_adaptation_state,
+    num_adaptation_samples,
+    steps_per_sample,
+    _acc_prob,
+    )
+    ensemble_info = None
+    step = eca_step(
+        build_kernel(
+        logdensity_fn, integrator, inverse_mass_matrix=inverse_mass_matrix
+        ),
+        adaptation.summary_statistics_fn,
+        adaptation.update,
+        num_chains,
+        ensemble_info,
+    )
+
+    initial_state_all = (initial_state, adaptation.initial_state)
+    # return (initial_state, adaptation.initial_state, None)
+
+    # run sampling
+    xs = (
+        jnp.arange(num_steps),
+        keys_sampling.T,
+        keys_adaptation,
+    )  # keys for all steps that will be performed. keys_sampling.shape = (num_steps, chains_per_device), keys_adaptation.shape = (num_steps, )
+
+    # ((a, Int) -> (a, Int))
+    def step_while(a):
+        x, i, _ = a
+
+        auxilliary_input = (xs[0][i], xs[1][i], xs[2][i])
+
+        output, info = step(x, auxilliary_input)
+
+        return (output, i + 1, info[0].get("while_cond"))
+
+    final_state_all, info_history = lax.scan(step, initial_state_all, xs)
+
+    final_state_new, final_adaptation_state_new = final_state_all
+    return (
+        final_state_new,
+        final_adaptation_state_new,
+        info_history,
+    )  # info history is composed of averages over all chains, so it is a couple of scalars
+
+p, pscalar = PartitionSpec("chains"), PartitionSpec()
+parallel_execute = shard_map(
+    all_steps,
+    mesh=mesh,
+    in_specs=(p, p, pscalar),
+    out_specs=(p, pscalar, pscalar),
+    check_rep=False,
+)
+
+# produce all random keys that will be needed
+
+key_sampling, key_adaptation = split(jax.random.key(0))
+num_steps = jnp.array(200).item()
+keys_adaptation = split(key_adaptation, num_steps)
+distribute_keys = lambda key, shape: device_put(
+    split(key, shape), NamedSharding(mesh, p)
+)  # random keys, distributed across devices
+keys_sampling = distribute_keys(key_sampling, (num_chains, num_steps))
+
+# run sampling in parallel
+final_state, final_adaptation_state, info_history = parallel_execute(
+    initial_state, keys_sampling, keys_adaptation
+)
+
+
+
+##########################
+
+
+
+
+
+
+
 
 
 ####
 # This one fails
 ####
 
-final_state, final_adaptation_state, info2 = run_eca(
-    rng_key=key_mclmc,
-    initial_state= HMCState(
-    final_state.position, final_state.logdensity, final_state.logdensity_grad
-    ),
-    kernel = build_kernel(
-    logdensity_fn, integrator, inverse_mass_matrix=inverse_mass_matrix
-    ),
-    adaptation= Adaptation(
-    final_adaptation_state,
-    num_adaptation_samples,
-    steps_per_sample,
-    _acc_prob,
-    ),
-    num_steps=num_samples,
-    num_chains=num_chains,
-    mesh=mesh,
-    ensemble_info=ensemble_observables,
-)
+# final_state, final_adaptation_state, info2 = run_eca(
+#     rng_key=key_mclmc,
+#     initial_state= HMCState(
+#     final_state.position, final_state.logdensity, final_state.logdensity_grad
+#     ),
+#     kernel = build_kernel(
+#     logdensity_fn, integrator, inverse_mass_matrix=inverse_mass_matrix
+#     ),
+#     adaptation= Adaptation(
+#     final_adaptation_state,
+#     num_adaptation_samples,
+#     steps_per_sample,
+#     _acc_prob,
+#     ),
+#     num_steps=num_samples,
+#     num_chains=num_chains,
+#     mesh=mesh,
+#     ensemble_info=ensemble_observables,
+# )
