@@ -344,3 +344,20 @@ def streaming_average_update(expectation, streaming_avg, weight=1.0, zero_preven
     total += weight
     streaming_avg = (count+1, total, unravel_fn(average))
     return streaming_avg
+
+
+
+
+def thinning(sampling_algorithm, num_thinning):
+    """Transform the sampling algorithm, such that only one every num_thinning samples is saved (to save memory). Returns a new sampling algorithm."""
+    
+    def update_fn(rng_key, state):
+        
+        # do 'num_thinning' number of steps
+        new_state, info = jax.lax.scan(lambda state, key: sampling_algorithm.step(key, state), 
+                                       init= state, 
+                                       xs= jax.random.split(rng_key, num_thinning))
+        
+        return new_state, jax.tree.map(lambda x: x[-1], info) # return only the last state and the associated info
+    
+    return SamplingAlgorithm(sampling_algorithm.init, update_fn)
