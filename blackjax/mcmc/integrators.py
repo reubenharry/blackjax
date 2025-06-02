@@ -399,7 +399,7 @@ isokinetic_mclachlan = generate_isokinetic_integrator(mclachlan_coefficients)
 isokinetic_omelyan = generate_isokinetic_integrator(omelyan_coefficients)
 
 
-def partially_refresh_momentum(momentum, rng_key, step_size, L):
+def partially_refresh_momentum(momentum, rng_key, L):
     """Adds a small noise to momentum and normalizes.
 
     Parameters
@@ -420,7 +420,7 @@ def partially_refresh_momentum(momentum, rng_key, step_size, L):
 
     m, unravel_fn = ravel_pytree(momentum)
     dim = m.shape[0]
-    nu = jnp.sqrt((jnp.exp(2 * step_size / L) - 1.0) / dim)
+    nu = jnp.sqrt((jnp.exp(2 / L) - 1.0) / dim)
     z = nu * normal(rng_key, shape=m.shape, dtype=m.dtype)
     new_momentum = unravel_fn((m + z) / jnp.linalg.norm(m + z))
 
@@ -440,8 +440,7 @@ def with_isokinetic_maruyama(integrator):
             momentum=partially_refresh_momentum(
                 momentum=init_state.momentum,
                 rng_key=key1,
-                L=L_proposal,
-                step_size=step_size * 0.5,
+                L=L_proposal / 0.5,
             )
         )
         # one step of the deterministic dynamics
@@ -452,8 +451,7 @@ def with_isokinetic_maruyama(integrator):
             momentum=partially_refresh_momentum(
                 momentum=state.momentum,
                 rng_key=key2,
-                L=L_proposal,
-                step_size=step_size * 0.5,
+                L=L_proposal / 0.5,
             )
         )
         return state, info

@@ -210,6 +210,7 @@ def emaus(
         key_init, logdensity_fn, sample_init, num_chains, mesh
     )
 
+
     # burn-in with the unadjusted method #
     kernel = umclmc.build_kernel(logdensity_fn)
     save_num = (jnp.rint(save_frac * num_steps1)).astype(int)
