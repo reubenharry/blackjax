@@ -16,11 +16,6 @@ from typing import Callable, NamedTuple, Optional
 import jax
 import jax.numpy as jnp
 
-import blackjax.smc as smc
-import blackjax.smc.from_mcmc as smc_from_mcmc
-from blackjax.base import SamplingAlgorithm
-from blackjax.smc.base import update_and_take_last
-from blackjax.types import Array, ArrayLikeTree, ArrayTree, PRNGKey
 import blackjax
 import blackjax.smc as smc
 import blackjax.smc.from_mcmc as smc_from_mcmc
@@ -29,9 +24,8 @@ from blackjax import smc
 from blackjax.base import SamplingAlgorithm
 from blackjax.smc import extend_params
 from blackjax.smc.base import SMCInfo, SMCState, update_and_take_last
-from blackjax.types import Array, ArrayLikeTree, ArrayTree, PRNGKey
 from blackjax.smc.from_mcmc import unshared_parameters_and_step_fn
-
+from blackjax.types import Array, ArrayLikeTree, ArrayTree, PRNGKey
 
 __all__ = ["PersistentSMCState", "init", "build_kernel", "as_top_level_api"]
 
@@ -164,6 +158,7 @@ def build_kernel(
         )
 
     return kernel
+
 
 # def as_top_level_api(
 #     logprior_fn: Callable,
