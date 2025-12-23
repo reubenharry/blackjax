@@ -41,7 +41,7 @@ Module Contents
        The momentum decoherent rate for the MCLMC algorithm.
    step_size
        The step size used for the MCLMC algorithm.
-   sqrt_diag_cov
+   inverse_mass_matrix
        A matrix used for preconditioning.
 
 
@@ -53,11 +53,11 @@ Module Contents
       :type:  float
 
 
-   .. py:attribute:: sqrt_diag_cov
+   .. py:attribute:: inverse_mass_matrix
       :type:  float
 
 
-.. py:function:: mclmc_find_L_and_step_size(mclmc_kernel, num_steps, state, rng_key, frac_tune1=0.1, frac_tune2=0.1, frac_tune3=0.1, desired_energy_var=0.0005, trust_in_estimate=1.5, num_effective_samples=150, diagonal_preconditioning=True)
+.. py:function:: mclmc_find_L_and_step_size(mclmc_kernel, num_steps, state, rng_key, frac_tune1=0.1, frac_tune2=0.1, frac_tune3=0.1, desired_energy_var=0.0005, trust_in_estimate=1.5, num_effective_samples=150, diagonal_preconditioning=True, params=None)
 
    Finds the optimal value of the parameters for the MCLMC algorithm.
 
@@ -72,16 +72,17 @@ Module Contents
    :param trust_in_estimate: The trust in the estimate of optimal stepsize.
    :param num_effective_samples: The number of effective samples for the MCMC algorithm.
    :param diagonal_preconditioning: Whether to do diagonal preconditioning (i.e. a mass matrix)
+   :param params: Initial params to start tuning from (optional)
 
    :rtype: A tuple containing the final state of the MCMC algorithm and the final hyperparameters.
 
    .. rubric:: Example
 
    .. code::
-       kernel = lambda sqrt_diag_cov : blackjax.mcmc.mclmc.build_kernel(
+       kernel = lambda inverse_mass_matrix : blackjax.mcmc.mclmc.build_kernel(
        logdensity_fn=logdensity_fn,
        integrator=integrator,
-       sqrt_diag_cov=sqrt_diag_cov,
+       inverse_mass_matrix=inverse_mass_matrix,
        )
 
        (
