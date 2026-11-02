@@ -52,9 +52,16 @@ def mclmc_find_L_and_step_size(
     num_effective_samples=150,
     diagonal_preconditioning=True,
     params=None,
+    initial_step_size_search=True,
+    max_search_steps=40,
+    fisher_weight=1.0,
+    L_factor=8.0,
 ):
     """
     Finds the optimal value of the parameters for the MCLMC algorithm.
+
+    The defaults include three modifications of the original recipe; setting
+    ``initial_step_size_search=False, fisher_weight=0.0, L_factor=None`` restores it.
 
     Parameters
     ----------
@@ -82,6 +89,21 @@ def mclmc_find_L_and_step_size(
         Whether to do diagonal preconditioning (i.e. a mass matrix)
     params
         Initial params to start tuning from (optional)
+    initial_step_size_search
+        Start with a bold-driver search: the step size grows by 1.3 after a step that
+        increased the log-density and halves (the step is reverted) after one that did
+        not. It stops early once increases become rare (the chain reached the typical
+        set) or after ``max_search_steps`` steps.
+    max_search_steps
+        Maximum number of steps of the initial step size search.
+    fisher_weight
+        Diagonal inverse mass matrix is ``var^(1 - w) * (var / E[g^2])^(w / 2)``, where
+        ``var`` is the position variance and ``g`` the log-density gradient. ``w = 0``
+        is the position variance (original), ``w = 1`` is ``sqrt(var / E[g^2])``.
+    L_factor
+        If not None, ``L = L_factor * sqrt(sum(var / inverse_mass_matrix))`` replaces the
+        autocorrelation-based L of the last tuning stage, which is then skipped.
+        ``None`` keeps the original rule.
 
     Returns
     -------
@@ -113,8 +135,14 @@ def mclmc_find_L_and_step_size(
             jnp.sqrt(dim), jnp.sqrt(dim) * 0.25, inverse_mass_matrix=jnp.ones((dim,))
         )
 
-    part1_key, part2_key = jax.random.split(rng_key, 2)
+    part1_key, part2_key, search_key = jax.random.split(rng_key, 3)
     total_num_tuning_integrator_steps = 0
+
+    if initial_step_size_search:
+        state, params, num_search_steps = make_step_size_search(
+            mclmc_kernel, max_search_steps
+        )(state, params, search_key)
+        total_num_tuning_integrator_steps += num_search_steps
 
     num_steps1, num_steps2 = round(num_steps * frac_tune1), round(
         num_steps * frac_tune2
@@ -131,16 +159,53 @@ def mclmc_find_L_and_step_size(
         trust_in_estimate=trust_in_estimate,
         num_effective_samples=num_effective_samples,
         diagonal_preconditioning=diagonal_preconditioning,
+        fisher_weight=fisher_weight,
+        L_factor=L_factor,
     )(state, params, num_steps, part1_key)
     total_num_tuning_integrator_steps += num_steps1 + num_steps2
 
-    if num_steps3 >= 2:  # at least 2 samples for ESS estimation
+    if L_factor is None and num_steps3 >= 2:  # at least 2 samples for ESS estimation
         state, params = make_adaptation_L(
             mclmc_kernel(params.inverse_mass_matrix), frac=frac_tune3, Lfactor=0.4
         )(state, params, num_steps, part2_key)
         total_num_tuning_integrator_steps += num_steps3
 
     return state, params, total_num_tuning_integrator_steps
+
+
+def make_step_size_search(
+    kernel, max_steps, min_steps=8, grow=1.3, shrink=0.5, decay=0.7, fail_level=0.45
+):
+    """Bold-driver step size search, stopped once the log-density rarely increases."""
+
+    def search(state, params, rng_key):
+        def cond(carry):
+            n, _, _, fail, _ = carry
+            return (n < max_steps) & ~((n >= min_steps) & (fail > fail_level))
+
+        def body(carry):
+            n, state, step_size, fail, key = carry
+            key, step_key = jax.random.split(key)
+            next_state, _ = kernel(params.inverse_mass_matrix)(
+                rng_key=step_key, state=state, L=params.L, step_size=step_size
+            )
+            finite = jnp.isfinite(next_state.logdensity) & jnp.all(
+                jnp.isfinite(ravel_pytree(next_state.position)[0])
+            )
+            improved = finite & (next_state.logdensity > state.logdensity)
+            state = jax.tree_util.tree_map(
+                lambda new, old: jnp.where(improved, new, old), next_state, state
+            )
+            step_size = step_size * jnp.where(improved, grow, shrink)
+            fail = decay * fail + (1.0 - decay) * (1.0 - improved)
+            return n + 1, state, step_size, fail, key
+
+        n, state, step_size, _, _ = jax.lax.while_loop(
+            cond, body, (0, state, params.step_size, 0.0, rng_key)
+        )
+        return state, params._replace(step_size=step_size), n
+
+    return search
 
 
 def make_L_step_size_adaptation(
@@ -152,6 +217,8 @@ def make_L_step_size_adaptation(
     desired_energy_var=1e-3,
     trust_in_estimate=1.5,
     num_effective_samples=150,
+    fisher_weight=0.0,
+    L_factor=None,
 ):
     """Adapts the stepsize and L of the MCLMC kernel. Designed for unadjusted MCLMC"""
 
@@ -218,9 +285,10 @@ def make_L_step_size_adaptation(
         )
 
         x = ravel_pytree(state.position)[0]
-        # update the running average of x, x^2
+        g = ravel_pytree(state.logdensity_grad)[0]
+        # update the running average of x, x^2, g^2
         streaming_avg = incremental_value_update(
-            expectation=jnp.array([x, jnp.square(x)]),
+            expectation=jnp.array([x, jnp.square(x), jnp.square(g)]),
             incremental_val=streaming_avg,
             weight=mask * success * params.step_size,
         )
@@ -233,7 +301,7 @@ def make_L_step_size_adaptation(
             state,
             params,
             (0.0, 0.0, jnp.inf),
-            (0.0, jnp.array([jnp.zeros(dim), jnp.zeros(dim)])),
+            (0.0, jnp.zeros((3, dim))),
         ),
         xs=xs,
     )[0]
@@ -263,14 +331,19 @@ def make_L_step_size_adaptation(
         # determine L
         inverse_mass_matrix = params.inverse_mass_matrix
         if num_steps2 > 1:
-            x_average, x_squared_average = average[0], average[1]
+            x_average, x_squared_average, g_squared_average = average
             variances = x_squared_average - jnp.square(x_average)
             L = jnp.sqrt(jnp.sum(variances))
 
             if diagonal_preconditioning:
-                inverse_mass_matrix = variances
+                inverse_mass_matrix = fisher_inverse_mass_matrix(
+                    variances, g_squared_average, fisher_weight
+                )
                 params = params._replace(inverse_mass_matrix=inverse_mass_matrix)
                 L = jnp.sqrt(dim)
+                if L_factor is not None:
+                    L = L_factor * jnp.sqrt(jnp.sum(variances / inverse_mass_matrix))
+                params = params._replace(L=L)
 
                 # readjust the stepsize
                 steps = round(num_steps2 / 3)  # we do some small number of steps
@@ -282,6 +355,20 @@ def make_L_step_size_adaptation(
         return state, MCLMCAdaptationState(L, params.step_size, inverse_mass_matrix)
 
     return L_step_size_adaptation
+
+
+def fisher_inverse_mass_matrix(variances, grad_squared_average, weight):
+    """Geometric blend of the position variance and the Fisher-based scale ``var / E[g^2]``.
+
+    ``var^(1 - weight) * (var / E[g^2])^(weight / 2)``; falls back to ``var`` where the
+    gradient moment is not usable.
+    """
+    fisher_scale = variances / grad_squared_average
+    usable = jnp.isfinite(fisher_scale) & (fisher_scale > 0) & (variances > 0)
+    blend = jnp.power(variances, 1.0 - weight) * jnp.power(
+        jnp.where(usable, fisher_scale, 1.0), 0.5 * weight
+    )
+    return jnp.where(usable, blend, variances)
 
 
 def make_adaptation_L(kernel, frac, Lfactor):
