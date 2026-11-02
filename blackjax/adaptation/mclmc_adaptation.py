@@ -57,6 +57,7 @@ def mclmc_find_L_and_step_size(
     max_search_steps=40,
     fisher_weight=1.0,
     L_factor=8.0,
+    ess_L_factor=0.4,
 ):
     """
     Finds the optimal value of the parameters for the MCLMC algorithm.
@@ -111,6 +112,8 @@ def mclmc_find_L_and_step_size(
         If not None, ``L = L_factor * sqrt(sum(var / inverse_mass_matrix))`` replaces the
         autocorrelation-based L of the last tuning stage, which is then skipped.
         ``None`` keeps the original rule.
+    ess_L_factor
+        Prefactor of the autocorrelation-based L, used only if ``L_factor`` is None.
 
     Returns
     -------
@@ -186,7 +189,7 @@ def mclmc_find_L_and_step_size(
 
     if L_factor is None and num_steps3 >= 2:  # at least 2 samples for ESS estimation
         state, params = make_adaptation_L(
-            mclmc_kernel(params.inverse_mass_matrix), frac=frac_tune3, Lfactor=0.4
+            mclmc_kernel(params.inverse_mass_matrix), frac=frac_tune3, Lfactor=ess_L_factor
         )(state, params, num_steps, part2_key)
         total_num_tuning_integrator_steps += num_steps3
 
