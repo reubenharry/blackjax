@@ -64,8 +64,17 @@ class MCLMCAdaptationTest(absltest.TestCase):
         _, params, steps = tune(
             position, initial_step_size_search=False, fisher_weight=0.0, L_factor=None
         )
-        self.assertEqual(int(steps), 200 + 266 + 200)  # frac 0.1 / 0.1 (+1/3) / 0.1 of 2000
+        self.assertEqual(int(steps), 2000)  # burn-in defaults to num_steps and is fully used
         self.assertTrue(jnp.all(params.inverse_mass_matrix > 0))
+
+    def test_burn_in_budget(self):
+        position = jax.random.normal(jax.random.key(1), (6,)) * SCALES
+        for burn_in in (300, 1000):
+            _, _, steps = tune(position, num_burn_in_steps=burn_in)
+            self.assertLessEqual(int(steps), burn_in)
+            self.assertGreater(int(steps), burn_in - 40)  # the search returns at most its reserve
+        _, _, steps = tune(position)  # default: burn-in = num_steps = 2000
+        self.assertLessEqual(int(steps), 2000)
 
     def test_search_stops_early_in_typical_set_and_grows_far_away(self):
         params = blackjax.adaptation.mclmc_adaptation.MCLMCAdaptationState(

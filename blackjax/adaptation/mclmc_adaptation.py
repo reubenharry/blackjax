@@ -52,6 +52,7 @@ def mclmc_find_L_and_step_size(
     num_effective_samples=150,
     diagonal_preconditioning=True,
     params=None,
+    num_burn_in_steps=None,
     initial_step_size_search=True,
     max_search_steps=40,
     fisher_weight=1.0,
@@ -68,17 +69,17 @@ def mclmc_find_L_and_step_size(
     mclmc_kernel
         The kernel function used for the MCMC algorithm.
     num_steps
-        The number of MCMC steps that will subsequently be run, after tuning.
+        The number of sampling steps that will subsequently be run, after tuning.
     state
         The initial state of the MCMC algorithm.
     rng_key
         The random number generator key.
     frac_tune1
-        The fraction of tuning for the first step of the adaptation.
+        Relative length of the first stage (step size adaptation).
     frac_tune2
-        The fraction of tuning for the second step of the adaptation.
+        Relative length of the second stage (mass matrix adaptation).
     frac_tune3
-        The fraction of tuning for the third step of the adaptation.
+        Relative length of the third stage (autocorrelation-based L, if ``L_factor`` is None).
     desired_energy_va
         The desired energy variance for the MCMC algorithm.
     trust_in_estimate
@@ -89,6 +90,12 @@ def mclmc_find_L_and_step_size(
         Whether to do diagonal preconditioning (i.e. a mass matrix)
     params
         Initial params to start tuning from (optional)
+    num_burn_in_steps
+        Maximum number of burn-in (tuning) steps, including the initial step size search.
+        Defaults to ``num_steps``. The step size search reserves ``max_search_steps`` of it
+        and returns the unused part; the remaining steps are split between the tuning
+        stages in proportion to ``frac_tune1``, ``frac_tune2`` (plus its readjustment third
+        when preconditioning) and ``frac_tune3`` (only used with the autocorrelation-based L).
     initial_step_size_search
         Start with a bold-driver search: the step size grows by 1.3 after a step that
         increased the log-density and halves (the step is reverted) after one that did
@@ -123,7 +130,7 @@ def mclmc_find_L_and_step_size(
             blackjax_mclmc_sampler_params,
         ) = blackjax.mclmc_find_L_and_step_size(
             mclmc_kernel=kernel,
-            num_steps=num_steps,
+            num_steps=num_steps,  # sampling steps; burn-in defaults to the same number
             state=initial_state,
             rng_key=tune_key,
             diagonal_preconditioning=preconditioning,
@@ -137,6 +144,8 @@ def mclmc_find_L_and_step_size(
 
     part1_key, part2_key, search_key = jax.random.split(rng_key, 3)
     total_num_tuning_integrator_steps = 0
+    if num_burn_in_steps is None:
+        num_burn_in_steps = num_steps
 
     if initial_step_size_search:
         state, params, num_search_steps = make_step_size_search(
@@ -144,6 +153,17 @@ def mclmc_find_L_and_step_size(
         )(state, params, search_key)
         total_num_tuning_integrator_steps += num_search_steps
 
+    # split the remaining burn-in over the stages; ``num_steps`` below is the tuning budget
+    num_steps = num_burn_in_steps - (max_search_steps if initial_step_size_search else 0)
+    weights = [
+        frac_tune1,
+        frac_tune2 * (1 + diagonal_preconditioning / 3),
+        frac_tune3 if L_factor is None else 0.0,
+    ]
+    weights = [w / sum(weights) for w in weights]
+    frac_tune1 = weights[0]
+    frac_tune2 = weights[1] / (1 + diagonal_preconditioning / 3)
+    frac_tune3 = weights[2]
     num_steps1, num_steps2 = round(num_steps * frac_tune1), round(
         num_steps * frac_tune2
     )
